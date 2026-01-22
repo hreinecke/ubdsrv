@@ -23,16 +23,41 @@
 
 #include <linux/ioctl.h>
 
-#include "ublk_cmd.h"
+#include "ublksrv.h"
 #include "sheepdog_proto.h"
 #include "sheep.h"
+
+enum sd_req_state {
+	SD_STATE_INIT,
+	SD_STATE_SEND_REQ,
+	SD_STATE_SEND_DATA,
+	SD_STATE_WRITE_REQ,
+};
 
 struct sd_io_context {
 	int ublk_tag;
 	struct sd_req req;
 	struct sd_rsp rsp;
+	struct iovec iov[2];
 	void *addr;
+	enum sd_req_state state;
 };
+
+int sheepdog_allocate_context(struct sheepdog_queue_ctx *ctx, int num_ctx)
+{
+	ctx->ctxs = (struct sd_io_context *)
+		calloc(num_ctx, sizeof(struct sd_io_context));
+	if (!ctx->ctxs)
+		return -ENOMEM;
+	ctx->num_ctx = num_ctx;
+}
+
+void sheepdog_free_context(struct sheepdog_queue_ctx *ctx)
+{
+	free(ctx->ctxs);
+	ctx->ctxs = NULL;
+	ctx->num_ctx = 0;
+}
 
 int connect_to_sheep(const char *addr, const char *port)
 {
@@ -42,7 +67,6 @@ int connect_to_sheep(const char *addr, const char *port)
 	struct addrinfo *rp = NULL;
 	int e;
 
-	sprintf(portstr, "%d", port);
 	memset(&hints,'\0',sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -149,13 +173,20 @@ int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p)
 	return rsp.result != SD_RES_SUCCESS ? -ENOENT : 0;
 }
 
-static void sheep_prep_rw(struct sheepdog_tgt_data *tgt_data,
-			  struct sd_io_context *sd_io,
-			  const struct ublksrv_io_desc *iod, int tag)
+int sheepdog_rw(const struct ublksrv_queue *q,
+		struct io_uring_sqe *sqe,
+		const struct ublksrv_io_desc *iod, int tag,
+		const struct sheepdog_tgt_data *tgt_data)
 {
+	struct sheepdog_queue_ctx *q_ctx =
+		(struct sheepdog_queue_ctx *)q->private_data;
+	struct sd_io_context *sd_io = &q_ctx->ctxs[tag];
+	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
-	uint64_t oid = vid_to_data_oid(tgt_data->vid, 0), cow_oid = 0;
+	uint64_t start = offset % object_size;
+	uint32_t idx = offset / object_size;
+	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx), cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 
 	sd_io->ublk_tag = tag;
@@ -163,59 +194,61 @@ static void sheep_prep_rw(struct sheepdog_tgt_data *tgt_data,
 
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	sd_io->req.id = tag;
-	sd_io->req.data_length = len;
 	if (ublk_op == UBLK_IO_OP_WRITE) {
-		sd_io->req.opcode = SD_WRITE_OBJ;
+		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		sd_io->req.obj.cow_oid = oid;
 	} else
 		sd_io->req.opcode = SD_OP_READ_OBJ;
 	sd_io->req.obj.oid = oid;
-	sd_io->req_hdr.obj.offset = (uint32_t)offset;
-	sd_io->req_hdr.data_length = total;
-	sd_io->req_hdr.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
-}
+	sd_io->req.obj.offset = (uint32_t)offset;
+	sd_io->req.data_length = total;
+	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 
-static int sheep_prep_io(struct sheepdog_tgt_data *tgt_data,
-			 struct sd_io_context *sd_io,
-			 const struct ublksrv_io_desc *iod, int tag)
-{
-	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t total = iod->nr_sectors << 9;
-	uint64_t oid = vid_to_data_oid(tgt_data->vid, 0), cow_oid = 0;
-	int ublk_op = ublksrv_get_op(iod);
-	struct io_uring_sqe *sqe;
-
-	sd_io->ublk_tag = tag;
-	sd_io->state = SD_STATE_SEND_REQ;
-
-	memset(&sd_io->req, 0, sizeof(sd_io->req));
-	sd_io->req.id = tag;
-	sd_io->req.data_length = len;
-	if (ublk_op == UBLK_IO_OP_WRITE) {
-		sd_io->req.opcode = SD_WRITE_OBJ;
-		sd_io->req.obj.cow_oid = oid;
-	} else
-		sd_io->req.opcode = SD_OP_READ_OBJ;
-	sd_io->req.obj.oid = oid;
-	sd_io->req_hdr.obj.offset = (uint32_t)offset;
-	sd_io->req_hdr.data_length = total;
-	sd_io->req_hdr.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
-
-	sqe = io_uring_get_sqe(q->ring);
+	sd_io->iov[0] = (struct iovec){
+		.iov_base = &sd_io->req,
+		.iov_len = sizeof(sd_io->req)
+	};
 	if (ublksrv_get_op(iod) == UBLK_IO_OP_WRITE) {
-		sd_io->iov[0] = (struct iovec){
-			.iov_base = &sd_io->req,
-			.iov_len = sizeof(sd_io->req)
-		};
 		sd_io->iov[1] = (struct iovec){
 			.iov_base = (void *)iod->addr,
 			.iov_len = total,
 		};
 		io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 2, 0);
 	} else {
-		io_uring_prep_write(sqe, q_ctx->fd, &sd_io->req,
-				    sizeof(sd_io->req_hdr), 0);
+		io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 1, 0);
 	}
 	io_uring_sqe_set_data(sqe, sd_io);
+	return 1;
 }
 
+int sheepdog_discard(const struct ublksrv_queue *q,
+		     struct io_uring_sqe *sqe,
+		     const struct ublksrv_io_desc *iod, int tag,
+		     const struct sheepdog_tgt_data *tgt_data)
+{
+	struct sheepdog_queue_ctx *q_ctx =
+		(struct sheepdog_queue_ctx *)q->private_data;
+	struct sd_io_context *sd_io = &q_ctx->ctxs[tag];
+	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
+	uint64_t offset = (uint64_t)iod->start_sector << 9;
+	uint32_t total = iod->nr_sectors << 9;
+	uint64_t start = offset % object_size;
+	uint32_t idx = offset / object_size;
+	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx);
+
+	sd_io->ublk_tag = tag;
+	sd_io->state = SD_STATE_SEND_REQ;
+
+	memset(&sd_io->req, 0, sizeof(sd_io->req));
+	sd_io->req.id = tag;
+	sd_io->req.opcode = SD_OP_REMOVE_OBJ;
+	sd_io->req.obj.oid = oid;
+
+	sd_io->iov[0] = (struct iovec){
+		.iov_base = &sd_io->req,
+		.iov_len = sizeof(sd_io->req)
+	};
+	io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 1, 0);
+	io_uring_sqe_set_data(sqe, sd_io);
+	return 1;
+}
