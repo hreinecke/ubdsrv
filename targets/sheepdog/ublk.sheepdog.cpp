@@ -5,11 +5,14 @@
 #include <poll.h>
 #include <sys/epoll.h>
 #include <linux/falloc.h>
+#include <stdlib.h>
 
 #include "ublksrv_tgt.h"
 #include "sheep.h"
 
 struct sheepdog_tgt_data {
+	char cluster_host[256];
+	char cluster_port[16];
 	char vdi_name[256];
 	unsigned long vid;
 	bool user_copy;
@@ -24,7 +27,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *dev, int type)
 		ublksrv_get_ctrl_dev(dev);
 	const struct ublksrv_ctrl_dev_info *info =
 		ublksrv_ctrl_get_dev_info(cdev);
-	int fd, ret;
+	int ret;
 	struct ublk_params p;
 	struct sheepdog_tgt_data *tgt_data =
 		(struct sheepdog_tgt_data*)dev->tgt.tgt_data;
@@ -32,7 +35,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *dev, int type)
 	ret = ublk_json_read_target_str_info(cdev, "vdi_name",
 					     tgt_data->vdi_name);
 	if (ret < 0) {
-		ublk_err( "%s: vdi name can't be retrieved from jbuf %d\n",
+		ublk_err( "%s: read vdi name failed, error %d\n",
 				__func__, ret);
 		return ret;
 	}
@@ -40,11 +43,26 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *dev, int type)
 	ret = ublk_json_read_target_ulong_info(cdev, "vid",
 			&tgt_data->vid);
 	if (ret) {
-		ublk_err( "%s: read target offset failed %d\n",
+		ublk_err( "%s: read vdi id failed, error %d\n",
 				__func__, ret);
 		return ret;
 	}
 
+	ret = ublk_json_read_target_str_info(cdev, "sheepdog_host",
+					     tgt_data->cluster_host);
+	if (ret) {
+		ublk_err( "%s: read hostname failed, error %d\n",
+				__func__, ret);
+		return ret;
+	}
+
+	ret = ublk_json_read_target_str_info(cdev, "sheepdog_port",
+					     tgt_data->cluster_port);
+	if (ret) {
+		ublk_err( "%s: read port id failed, error %d\n",
+				__func__, ret);
+		return ret;
+	}
 	ret = ublk_json_read_params(&p, cdev);
 	if (ret) {
 		ublk_err( "%s: read ublk params failed %d\n",
@@ -55,8 +73,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *dev, int type)
 	ublksrv_tgt_set_io_data_size(tgt);
 	tgt->dev_size = p.basic.dev_sectors << 9;
 	tgt->tgt_ring_depth = info->queue_depth;
-	tgt->nr_fds = 1;
-	tgt->fds[1] = fd;
+	tgt->nr_fds = 0;
 
 	tgt_data->auto_zc = info->flags & UBLK_F_AUTO_BUF_REG;
 	tgt_data->zero_copy = info->flags & UBLK_F_SUPPORT_ZERO_COPY;
@@ -69,7 +86,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *dev, int type)
 
 static int sheepdog_recover_tgt(struct ublksrv_dev *dev, int type)
 {
-	dev->tgt.tgt_data = calloc(sizeof(struct sheepdog_tgt_data), 1);
+	dev->tgt.tgt_data = calloc(1, sizeof(struct sheepdog_tgt_data));
 
 	return sheepdog_setup_tgt(dev, type);
 }
@@ -80,15 +97,16 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	const struct ublksrv_ctrl_dev *cdev = ublksrv_get_ctrl_dev(dev);
 	const struct ublksrv_ctrl_dev_info *info =
 		ublksrv_ctrl_get_dev_info(cdev);
-	int use_pbs = 0;
-	static const struct option lo_longopts[] = {
-		{ "name",		1,	NULL, 'n' },
-		{ "use_pbs",	no_argument, &use_pbs, 1},
-		{ "lbs",		required_argument, NULL, 'b'},
+	static const struct option sheepdog_longopts[] = {
+		{ "host",	required_argument, NULL, 'h'},
+		{ "port",	required_argument, NULL, 'p'},
+		{ "name",	required_argument, NULL, 'n' },
+		{ "lbs",	required_argument, NULL, 'b'},
 		{ NULL }
 	};
 	int fd, opt, lbs, ret;
 	char *vdi_name = NULL;
+	char *cluster_host = NULL, *cluster_port = NULL;
 	struct ublksrv_tgt_base_json tgt_json = { 0 };
 	struct ublk_params p = {
 		.types = UBLK_PARAM_TYPE_BASIC | UBLK_PARAM_TYPE_DISCARD |
@@ -118,8 +136,8 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 
 	strcpy(tgt_json.name, "sheepdog");
 
-	while ((opt = getopt_long(argc, argv, "-:n:o:",
-				  lo_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "h:p:n:b:",
+				  sheepdog_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'n':
 			vdi_name = strdup(optarg);
@@ -132,20 +150,31 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 			if (lbs < 9)
 				return -EINVAL;
 			break;
+		case 'h':
+			cluster_host = strdup(optarg);
+			break;
 		case 'p':
-			use_pbs = 1;
+			cluster_port = strdup(optarg);
 			break;
 		}
 	}
 
-	if (!vdi_name)
-		return -1;
+	if (!vdi_name) {
+		errno = ENOMEM;
+		ret = -1;
+		goto out_free;
+	}
 
-	fd = connect_to_sheep("127.0.0.1", 7000);
+	if (!cluster_host)
+		cluster_host = strdup("127.0.0.1");
+	if (!cluster_port)
+		cluster_port = strdup("7000");
+	fd = connect_to_sheep(cluster_host, cluster_port);
 	if (fd < 0) {
 		ublk_err( "%s: cannot connect to sheepdog cluster\n",
 			  __func__);
-		return fd;
+		ret = fd;
+		goto out_free;
 	}
 
 	ret = sheepdog_vdi_lookup(fd, vdi_name, &vid);
@@ -153,7 +182,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		ublk_err( "%s: failed to get VDI id for '%s'\n",
 			  __func__, vdi_name);
 		close(fd);
-		return ret;
+		goto out_free;
 	}
 
 	ret = sheepdog_read_params(fd, vid, &p);
@@ -161,10 +190,8 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	if (ret < 0) {
 		ublk_err( "%s: failed to read params for VID %x\n",
 			  __func__, vid);
-		return ret;
+		goto out_free;
 	}
-	if (!use_pbs)
-		p.basic.physical_bs_shift = 12;
 	if (lbs) {
 		if (lbs > p.basic.physical_bs_shift) {
 			ublk_err( "%s: logical block size %d too large\n",
@@ -182,15 +209,49 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 
 	ublk_json_write_dev_info(cdev);
 	ublk_json_write_target_base(cdev, &tgt_json);
+	ublk_json_write_tgt_str(cdev, "sheepdog_host", cluster_host);
+	ublk_json_write_tgt_str(cdev, "sheepdog_port", cluster_port);
 	ublk_json_write_tgt_str(cdev, "vdi_name", vdi_name);
 	ublk_json_write_tgt_long(cdev, "vid", vid);
 	ublk_json_write_params(cdev, &p);
 
-	close(fd);
-
 	dev->tgt.tgt_data = calloc(sizeof(struct sheepdog_tgt_data), 1);
 
-	return sheepdog_setup_tgt(dev, type);
+	ret = sheepdog_setup_tgt(dev, type);
+out_free:
+	if (cluster_host)
+		free(cluster_host);
+	if (cluster_port)
+		free(cluster_port);
+	return ret;
+}
+
+static int sheepdog_init_queue(struct ublksrv_queue *q)
+{
+	struct ublksrv_tgt_info *tgt = &q->dev->tgt;
+	struct sheepdog_tgt_data *tgt_data =
+		(struct sheepdog_tgt_data *)tgt->tgt_data;
+	struct sheepdog_queue_ctx *q_ctx;
+	int fd, ret;
+
+	q_ctx = (struct sheepdog_queue_ctx *)calloc(1, sizeof(struct sheepdog_queue_ctx));
+	if (!q_ctx)
+		return -ENOMEM;
+
+	ret = sheep_allocate_context(q_ctx, tgt_ring_depth);
+	if (ret < 0) {
+		free(q_ctx);
+		return -ENOMEM;
+	}
+	fd = connect_to_sheep(tgt_data->cluster_host,
+			      tgt_data->cluster_port);
+	if (fd < 0) {
+		free(q_ctx);
+		return fd;
+	}
+	q_ctx->fd = fd;
+	
+	return 0;
 }
 
 static inline int sheepdog_fallocate_mode(const struct ublksrv_io_desc *iod)
@@ -217,7 +278,8 @@ static inline int sheepdog_fallocate_mode(const struct ublksrv_io_desc *iod)
 static inline void sheepdog_rw_handle_fua(struct io_uring_sqe *sqe,
 		const struct ublksrv_io_desc *iod)
 {
-	if (ublksrv_get_op(iod) == UBLK_IO_OP_WRITE && (iod->op_flags & UBLK_IO_F_FUA))
+	if (ublksrv_get_op(iod) == UBLK_IO_OP_WRITE &&
+	    (iod->op_flags & UBLK_IO_F_FUA))
 		sqe->rw_flags |= RWF_DSYNC;
 }
 
@@ -272,21 +334,10 @@ static int sheepdog_rw(const struct ublksrv_queue *q,
 	enum io_uring_op uring_op = ublk_to_uring_fs_op(iod, tgt_data->auto_zc);
 	void *buf = tgt_data->auto_zc ? NULL : (void *)iod->addr;
 	struct io_uring_sqe *sqe[1];
+	int ublk_op = ublksrv_get_op(iod);
 
-	ublk_queue_alloc_sqes(q, sqe, 1);
-	io_uring_prep_rw(uring_op,
-		sqe[0],
-		1 /*fds[1]*/,
-		buf,
-		iod->nr_sectors << 9,
-		iod->start_sector << 9);
-	if (tgt_data->auto_zc)
-		sqe[0]->buf_index = tag;
-
-	io_uring_sqe_set_flags(sqe[0], IOSQE_FIXED_FILE);
+	sheep_queue_rw(tgt_data, sd_io, iod, tag);
 	sheepdog_rw_handle_fua(sqe[0], iod);
-
-	sqe[0]->user_data = build_user_data(tag, ublksrv_get_op(iod), 0, 1);
 	return 1;
 }
 
@@ -382,7 +433,8 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 {
 	const struct ublksrv_io_desc *iod = data->iod;
 	unsigned ublk_op = ublksrv_get_op(iod);
-	const struct sheepdog_tgt_data *tgt_data = (struct sheepdog_tgt_data*) q->dev->tgt.tgt_data;
+	const struct sheepdog_tgt_data *tgt_data =
+		(struct sheepdog_tgt_data*) q->dev->tgt.tgt_data;
 	int ret;
 
 	switch (ublk_op) {
@@ -481,6 +533,7 @@ static const struct ublksrv_tgt_type  sheepdog_tgt_type = {
 	.tgt_io_done = sheepdog_tgt_io_done,
 	.usage_for_add = sheepdog_cmd_usage,
 	.init_tgt = sheepdog_init_tgt,
+	.init_queue = sheepdog_init_queue,
 	.deinit_tgt =  sheepdog_deinit_tgt,
 	.name	=  "sheepdog",
 };
