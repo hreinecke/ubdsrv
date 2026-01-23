@@ -24,6 +24,7 @@
 #include <linux/ioctl.h>
 
 #include "ublksrv.h"
+#include "ublksrv_utils.h"
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
@@ -60,7 +61,8 @@ int connect_to_sheep(const char *addr, const char *port)
 	e = getaddrinfo(addr, port, &hints, &ai);
 
 	if(e != 0) {
-		fprintf(stderr, "getaddrinfo failed: %s\n", gai_strerror(e));
+		ublk_err( "%s: getaddrinfo failed: %s\n",
+			  __func__, gai_strerror(e));
 		freeaddrinfo(ai);
 		return -1;
 	}
@@ -78,6 +80,8 @@ int connect_to_sheep(const char *addr, const char *port)
 	}
 
 	if (rp == NULL) {
+		ublk_err( "%s: no valid addresses found for %s:%s\n",
+			  __func__, addr, port);
 		sock = -1;
 		goto err;
 	}
@@ -132,15 +136,24 @@ static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 		.msg_iovlen = sendmsg_iovs,
 	};
 	ret = sendmsg(fd, &msg, MSG_DONTWAIT);
-	if (ret < 0)
-		return errno;
+	if (ret < 0) {
+		ublk_err("%s: sendmsg failed, errno %d\n",
+			 __func__, errno);
+		return -errno;
+	}
 	msg = (struct msghdr) {
 		.msg_iov = recvmsg_iov,
 		.msg_iovlen = recvmsg_iovs,
 	};
-	ret = recvmsg(fd, &msg, MSG_DONTWAIT | MSG_WAITALL);
-	if (ret < 0)
+	ret = recvmsg(fd, &msg, MSG_WAITALL);
+	if (ret < 0) {
+		ublk_err("%s: recvmsg failed, errno %d\n",
+			 __func__, errno);
 		return -errno;
+	}
+	if (rsp->result)
+		ublk_err("%s: sheepdog rsp %d\n",
+			 __func__, rsp->result);
 	switch (rsp->result) {
 	case SD_RES_SUCCESS:
 		ret = 0;
@@ -179,8 +192,11 @@ int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid)
 	strncpy(name_buf, name, strlen(name));
 
 	ret = sheepdog_submit(fd, &req, &rsp, (void *)name);
-	if (ret < 0)
+	if (ret < 0) {
+		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
+			  __func__, name, ret);
 		return ret;
+	}
 
 	*vid = rsp.vdi.vdi_id;
 	return 0;
@@ -198,8 +214,11 @@ int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p)
 	req.obj.oid = vid_to_vdi_oid(vdi_id);
 	req.obj.offset = 0;
 	ret = sheepdog_submit(fd, &req, &rsp, &inode);
-	if (ret < 0)
+	if (ret < 0) {
+		ublk_err( "%s: failed to read inode from vid '%d', error %d\n",
+			  __func__, vdi_id, ret);
 		return ret;
+	}
 	p->basic.chunk_sectors = SD_DATA_OBJ_SIZE;
 	p->basic.physical_bs_shift = inode.block_size_shift;
 	p->basic.dev_sectors = inode.vdi_size >> 9;
