@@ -257,24 +257,6 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 	free(q_ctx);
 }
 
-static int sheepdog_queue_tgt_rw(const struct ublksrv_queue *q,
-		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io)
-{
-	struct io_uring_sqe *sqe[1];
-	ublk_queue_alloc_sqes(q, sqe, 1);
-	return sheepdog_rw(q, sqe[0], iod, sd_io);
-}
-
-static int sheepdog_handle_discard(const struct ublksrv_queue *q,
-		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io)
-{
-	struct io_uring_sqe *sqe[1];
-	ublk_queue_alloc_sqes(q, sqe, 1);
-	return sheepdog_discard(q, sqe[0], iod, sd_io);
-}
-
 static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data, int tag)
 {
@@ -282,20 +264,22 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
 	const struct ublksrv_io_desc *iod = data->iod;
 	unsigned ublk_op = ublksrv_get_op(iod);
+	struct io_uring_sqe *sqe[1];
 	int ret;
 
+	if (ublk_op == UBLK_IO_OP_FLUSH)
+		return 0;
+
+	ublk_queue_alloc_sqes(q, sqe, 1);
 	sd_io->ublk_tag = tag;
 	switch (ublk_op) {
-	case UBLK_IO_OP_FLUSH:
-		ret = 0;
-		break;
 	case UBLK_IO_OP_WRITE_ZEROES:
 	case UBLK_IO_OP_DISCARD:
-		ret = sheepdog_handle_discard(q, iod, sd_io);
+		ret = sheepdog_discard(q, sqe[0], iod, sd_io);
 		break;
 	case UBLK_IO_OP_READ:
 	case UBLK_IO_OP_WRITE:
-		ret = sheepdog_queue_tgt_rw(q, iod, sd_io);
+		ret = sheepdog_rw(q, sqe[0], iod, sd_io);
 		break;
 	default:
 		ret = -EINVAL;
@@ -353,9 +337,13 @@ static void sheepdog_tgt_io_done(const struct ublksrv_queue *q,
 	int ret;
 
 	ret = sheepdog_done(q, sd_io, cqe);
-	if (ret == -EAGAIN)
-		sheepdog_queue_tgt_rw(q, data->iod, sd_io);
-	ublksrv_tgt_io_done(q, data, cqe);
+	if (ret == -EAGAIN) {
+		struct io_uring_sqe *sqe[1];
+
+		ublk_queue_alloc_sqes(q, sqe, 1);
+		sheepdog_rw(q, sqe[0], data->iod, sd_io);
+	} else
+		ublksrv_tgt_io_done(q, data, cqe);
 }
 
 static void sheepdog_deinit_tgt(const struct ublksrv_dev *dev)
