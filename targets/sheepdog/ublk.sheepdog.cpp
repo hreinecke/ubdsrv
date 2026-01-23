@@ -258,92 +258,46 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 }
 
 static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
-		const struct ublk_io_data *data, int tag)
+		const struct ublk_io_data *data,
+		struct ublk_io_tgt *io)
 {
-	struct ublk_io_tgt *io = __ublk_get_io_tgt_data(data);
 	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
 	const struct ublksrv_io_desc *iod = data->iod;
+	uint64_t total = iod->nr_sectors << 9;
 	unsigned ublk_op = ublksrv_get_op(iod);
-	struct io_uring_sqe *sqe[1];
 	int ret;
 
 	if (ublk_op == UBLK_IO_OP_FLUSH)
 		return 0;
 
-	ublk_queue_alloc_sqes(q, sqe, 1);
-	sd_io->ublk_tag = tag;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE_ZEROES:
 	case UBLK_IO_OP_DISCARD:
-		ret = sheepdog_discard(q, sqe[0], iod, sd_io);
+		ret = sheepdog_discard(q, iod, sd_io, data->tag);
 		break;
 	case UBLK_IO_OP_READ:
 	case UBLK_IO_OP_WRITE:
-		ret = sheepdog_rw(q, sqe[0], iod, sd_io);
+		ret = sheepdog_rw(q, iod, sd_io, data->tag);
 		break;
 	default:
 		ret = -EINVAL;
 		break;
 	}
 
-	ublk_dbg(UBLK_DBG_IO, "%s: tag %d ublk io %x %llx %u\n", __func__, tag,
-			iod->op_flags, iod->start_sector, iod->nr_sectors << 9);
-	return ret;
-}
-
-static co_io_job __sheepdog_handle_io_async(const struct ublksrv_queue *q,
-		const struct ublk_io_data *data, int tag)
-{
-	struct ublk_io_tgt *io = __ublk_get_io_tgt_data(data);
-	int ret;
-
- again:
-	ret = sheepdog_queue_tgt_io(q, data, tag);
-	if (ret > 0) {
-		int io_res = 0;
-		while (ret-- > 0) {
-			int res;
-
-			co_await__suspend_always(tag);
-			res = ublksrv_tgt_process_cqe(io, &io_res);
-			if (res < 0 && io_res >= 0)
-				io_res = res;
-		}
-		if (io_res == -EAGAIN)
-			goto again;
-		ublksrv_complete_io(q, tag, io_res);
-	} else if (ret < 0) {
-		ublk_err( "fail to queue io %d, ret %d\n", tag, tag);
-	} else {
-		ublk_err( "no sqe %d\n", tag);
-	}
+	ublk_dbg(UBLK_DBG_IO, "%s: tag %d opcode %x len %ld ret %d\n", __func__,
+		 data->tag, sd_io->req.opcode, total, ret);
+	return ret < 0 ? ret : total;
 }
 
 static int sheepdog_handle_io_async(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data)
 {
 	struct ublk_io_tgt *io = __ublk_get_io_tgt_data(data);
-
-	io->co = __sheepdog_handle_io_async(q, data, data->tag);
-	return 0;
-}
-
-static void sheepdog_tgt_io_done(const struct ublksrv_queue *q,
-		const struct ublk_io_data *data,
-		const struct io_uring_cqe *cqe)
-{
-	struct ublk_io_tgt *io = __ublk_get_io_tgt_data(data);
-	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
 	int ret;
 
-	ret = sheepdog_done(q, sd_io, cqe);
-	if (ret == -EAGAIN) {
-		struct io_uring_sqe *sqe[1];
-
-		ublk_queue_alloc_sqes(q, sqe, 1);
-		sheepdog_rw(q, sqe[0], data->iod, sd_io);
-	} else
-		ublksrv_tgt_io_done(q, data, cqe);
+	ret = sheepdog_queue_tgt_io(q, data, io);
+	ublksrv_complete_io(q, data->tag, ret);
+	return 0;
 }
 
 static void sheepdog_deinit_tgt(const struct ublksrv_dev *dev)
@@ -359,7 +313,6 @@ static void sheepdog_cmd_usage()
 
 static const struct ublksrv_tgt_type  sheepdog_tgt_type = {
 	.handle_io_async = sheepdog_handle_io_async,
-	.tgt_io_done = sheepdog_tgt_io_done,
 	.usage_for_add = sheepdog_cmd_usage,
 	.init_tgt = sheepdog_init_tgt,
 	.deinit_tgt = sheepdog_deinit_tgt,

@@ -21,20 +21,10 @@ struct sheepdog_queue_ctx {
 	struct sd_io_context *ctxs;
 };
 
-enum sd_req_state {
-	SD_STATE_INIT,
-	SD_STATE_SEND_REQ,
-	SD_STATE_READ_DATA,
-	SD_STATE_READ_RSP,
-};
-
 struct sd_io_context {
-	int ublk_tag;
 	struct sd_req req;
 	struct sd_rsp rsp;
-	struct iovec iov[2];
 	void *addr;
-	enum sd_req_state state;
 };
 
 int connect_to_sheep(const char *addr, const char *port);
@@ -43,16 +33,12 @@ int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
 void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);
 int sheepdog_rw(const struct ublksrv_queue *q,
-		struct io_uring_sqe *sqe,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io);
+		struct sd_io_context *sd_io, int tag);
 int sheepdog_discard(const struct ublksrv_queue *q,
-		     struct io_uring_sqe *sqe,
 		     const struct ublksrv_io_desc *iod,
-		     struct sd_io_context *sd_io);
-int sheepdog_done(const struct ublksrv_queue *q,
-		  struct sd_io_context *sd_io,
-		  const struct io_uring_cqe *cqe);
+		     struct sd_io_context *sd_io, int tag);
+
 #ifdef __cplusplus
 }
 #endif

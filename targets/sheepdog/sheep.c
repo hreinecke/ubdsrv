@@ -89,25 +89,78 @@ err:
 	return sock;
 }
 
-static int sheepdog_submit(int fd, struct sd_req *req, const void *buf,
-			   struct sd_rsp *rsp)
+static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
+			   void *addr)
 {
 	size_t buflen = req->data_length;
+	struct iovec iov[3], *sendmsg_iov = NULL, *recvmsg_iov = NULL;
+	int sendmsg_iovs = 1, recvmsg_iovs = 1;
+	bool is_write = req->flags & SD_FLAG_CMD_WRITE;
+	struct msghdr msg;
 	int ret;
 
-	ret = write(fd, req, sizeof(*req));
-	if (ret != sizeof(req))
-		return -EIO;
-	if (buf) {
-		ret = write(fd, buf, buflen);
-		if (ret != buflen)
-			return -EIO;
+	iov[0] = (struct iovec){
+		.iov_base = req,
+		.iov_len = sizeof(*req),
+	};
+	sendmsg_iov = &iov[0];
+	if (addr) {
+		iov[1] = (struct iovec){
+			.iov_base = (void *)addr,
+			.iov_len = buflen,
+		};
+		iov[2] = (struct iovec){
+			.iov_base = rsp,
+			.iov_len = sizeof(*rsp),
+		};
+		if (is_write) {
+			recvmsg_iov = &iov[2];
+			sendmsg_iovs++;
+		} else {
+			recvmsg_iov = &iov[1];
+			recvmsg_iovs++;
+		}
+	} else {
+		iov[1] = (struct iovec){
+			.iov_base = rsp,
+			.iov_len = sizeof(*rsp),
+		};
+		recvmsg_iov = &iov[1];
 	}
-	ret = read(fd, rsp, sizeof(*rsp));
-	if (ret != sizeof(*rsp))
-		return -EIO;
-
-	return 0;
+	msg = (struct msghdr) {
+		.msg_iov = sendmsg_iov,
+		.msg_iovlen = sendmsg_iovs,
+	};
+	ret = sendmsg(fd, &msg, MSG_DONTWAIT);
+	if (ret < 0)
+		return errno;
+	msg = (struct msghdr) {
+		.msg_iov = recvmsg_iov,
+		.msg_iovlen = recvmsg_iovs,
+	};
+	ret = recvmsg(fd, &msg, MSG_DONTWAIT | MSG_WAITALL);
+	if (ret < 0)
+		return -errno;
+	switch (rsp->result) {
+	case SD_RES_SUCCESS:
+		ret = 0;
+		break;
+	case SD_RES_NO_OBJ:
+	case SD_RES_NO_VDI:
+	case SD_RES_NO_BASE_VDI:
+		ret = -ENOENT;
+		break;
+	case SD_RES_VDI_EXIST:
+		ret = -EEXIST;
+		break;
+	case SD_RES_INVALID_PARMS:
+		ret = -EINVAL;
+		break;
+	default:
+		ret = -EIO;
+		break;
+	}
+	return ret;
 }
 
 /* --- Sheepdog Protocol Handshake --- */
@@ -125,11 +178,9 @@ int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid)
 	req.flags = SD_FLAG_CMD_WRITE;
 	strncpy(name_buf, name, strlen(name));
 
-	ret = sheepdog_submit(fd, &req, name, &rsp);
+	ret = sheepdog_submit(fd, &req, &rsp, (void *)name);
 	if (ret < 0)
 		return ret;
-	if (rsp.result != SD_RES_SUCCESS)
-		return -ENOENT;
 
 	*vid = rsp.vdi.vdi_id;
 	return 0;
@@ -146,21 +197,18 @@ int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p)
 	req.data_length = SD_INODE_SIZE;
 	req.obj.oid = vid_to_vdi_oid(vdi_id);
 	req.obj.offset = 0;
-	ret = sheepdog_submit(fd, &req, &inode, &rsp);
+	ret = sheepdog_submit(fd, &req, &rsp, &inode);
 	if (ret < 0)
 		return ret;
-	if (rsp.result != SD_RES_SUCCESS)
-		return -ENOENT;
 	p->basic.chunk_sectors = SD_DATA_OBJ_SIZE;
 	p->basic.physical_bs_shift = inode.block_size_shift;
 	p->basic.dev_sectors = inode.vdi_size >> 9;
-	return rsp.result != SD_RES_SUCCESS ? -ENOENT : 0;
+	return 0;
 }
 
 int sheepdog_rw(const struct ublksrv_queue *q,
-		struct io_uring_sqe *sqe,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io)
+		struct sd_io_context *sd_io, int tag)
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
@@ -173,118 +221,40 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx), cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 
-	sd_io->state = SD_STATE_SEND_REQ;
-
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
-	sd_io->req.id = sd_io->ublk_tag;
+	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
+	sd_io->req.id = tag;
 	if (ublk_op == UBLK_IO_OP_WRITE) {
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		sd_io->req.obj.cow_oid = oid;
+		sd_io->req.flags = SD_FLAG_CMD_WRITE;
 	} else
 		sd_io->req.opcode = SD_OP_READ_OBJ;
 	sd_io->req.obj.oid = oid;
-	sd_io->req.obj.offset = (uint32_t)offset;
+	sd_io->req.obj.offset = start;
 	sd_io->req.data_length = total;
-	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 
-	sd_io->iov[0] = (struct iovec){
-		.iov_base = &sd_io->req,
-		.iov_len = sizeof(sd_io->req)
-	};
-	if (ublksrv_get_op(iod) == UBLK_IO_OP_WRITE) {
-		sd_io->iov[1] = (struct iovec){
-			.iov_base = (void *)iod->addr,
-			.iov_len = total,
-		};
-		io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 2, 0);
-	} else {
-		io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 1, 0);
-	}
-	io_uring_sqe_set_data(sqe, sd_io);
-	return 1;
+	return sheepdog_submit(q_ctx->fd, &sd_io->req,
+			       &sd_io->rsp, (void *)iod->addr);
 }
 
 int sheepdog_discard(const struct ublksrv_queue *q,
-		     struct io_uring_sqe *sqe,
 		     const struct ublksrv_io_desc *iod,
-		     struct sd_io_context *sd_io)
+		     struct sd_io_context *sd_io, int tag)
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
 	const struct sheepdog_tgt_data *tgt_data = q->dev->tgt.tgt_data;
 	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t total = iod->nr_sectors << 9;
-	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
 	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx);
 
-	sd_io->state = SD_STATE_SEND_REQ;
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
-	sd_io->req.id = sd_io->ublk_tag;
+	sd_io->req.id = tag;
 	sd_io->req.opcode = SD_OP_REMOVE_OBJ;
 	sd_io->req.obj.oid = oid;
 
-	sd_io->iov[0] = (struct iovec){
-		.iov_base = &sd_io->req,
-		.iov_len = sizeof(sd_io->req)
-	};
-	io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 1, 0);
-	io_uring_sqe_set_data(sqe, sd_io);
-	return 1;
-}
-
-int sheepdog_done(const struct ublksrv_queue *q,
-		  struct sd_io_context *sd_io,
-		  const struct io_uring_cqe *cqe)
-{
-	struct sheepdog_queue_ctx *q_ctx =
-		(struct sheepdog_queue_ctx *)q->private_data;
-	int tag = user_data_to_tag(cqe->user_data);
-	unsigned ublk_op = user_data_to_op(cqe->user_data);
-	int ret;
-
-	if (cqe->res) {
-		sd_io->state = SD_STATE_INIT;
-		return cqe->res;
-	}
-	switch (sd_io->state) {
-	case SD_STATE_SEND_REQ:
-		if (ublk_op == UBLK_IO_OP_READ)
-			sd_io->state == SD_STATE_READ_DATA;
-		else
-			sd_io->state == SD_STATE_READ_RSP;
-		ret = -EAGAIN;
-		break;
-	case SD_STATE_READ_DATA:
-		sd_io->state = SD_STATE_READ_RSP;
-		ret = -EAGAIN;
-		break;
-	default:
-		sd_io->state = SD_STATE_INIT;
-		break;
-	}
-	if (sd_io->state == SD_STATE_INIT) {
-		switch (sd_io->rsp.result) {
-		case SD_RES_SUCCESS:
-			ret = 0;
-			break;
-		case SD_RES_NO_OBJ:
-		case SD_RES_NO_VDI:
-		case SD_RES_NO_BASE_VDI:
-			ret = -ENOENT;
-			break;
-		case SD_RES_VDI_EXIST:
-			ret = -EEXIST;
-			break;
-		case SD_RES_INVALID_PARMS:
-			ret = -EINVAL;
-			break;
-		default:
-			ret = -EIO;
-			break;
-		}
-	}
-	return ret;
+	return sheepdog_submit(q_ctx->fd, &sd_io->req, &sd_io->rsp, NULL);
 }
