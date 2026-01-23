@@ -27,22 +27,6 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
-enum sd_req_state {
-	SD_STATE_INIT,
-	SD_STATE_SEND_REQ,
-	SD_STATE_SEND_DATA,
-	SD_STATE_WRITE_REQ,
-};
-
-struct sd_io_context {
-	int ublk_tag;
-	struct sd_req req;
-	struct sd_rsp rsp;
-	struct iovec iov[2];
-	void *addr;
-	enum sd_req_state state;
-};
-
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *ctx, int num_ctx)
 {
 	ctx->ctxs = (struct sd_io_context *)
@@ -175,12 +159,12 @@ int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p)
 
 int sheepdog_rw(const struct ublksrv_queue *q,
 		struct io_uring_sqe *sqe,
-		const struct ublksrv_io_desc *iod, int tag,
-		const struct sheepdog_tgt_data *tgt_data)
+		const struct ublksrv_io_desc *iod,
+		struct sd_io_context *sd_io)
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
-	struct sd_io_context *sd_io = &q_ctx->ctxs[tag];
+	const struct sheepdog_tgt_data *tgt_data = q->dev->tgt.tgt_data;
 	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
@@ -189,11 +173,10 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx), cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 
-	sd_io->ublk_tag = tag;
 	sd_io->state = SD_STATE_SEND_REQ;
 
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
-	sd_io->req.id = tag;
+	sd_io->req.id = sd_io->ublk_tag;
 	if (ublk_op == UBLK_IO_OP_WRITE) {
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		sd_io->req.obj.cow_oid = oid;
@@ -223,12 +206,12 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 
 int sheepdog_discard(const struct ublksrv_queue *q,
 		     struct io_uring_sqe *sqe,
-		     const struct ublksrv_io_desc *iod, int tag,
-		     const struct sheepdog_tgt_data *tgt_data)
+		     const struct ublksrv_io_desc *iod,
+		     struct sd_io_context *sd_io)
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
-	struct sd_io_context *sd_io = &q_ctx->ctxs[tag];
+	const struct sheepdog_tgt_data *tgt_data = q->dev->tgt.tgt_data;
 	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
@@ -236,11 +219,10 @@ int sheepdog_discard(const struct ublksrv_queue *q,
 	uint32_t idx = offset / object_size;
 	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx);
 
-	sd_io->ublk_tag = tag;
 	sd_io->state = SD_STATE_SEND_REQ;
-
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
-	sd_io->req.id = tag;
+	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
+	sd_io->req.id = sd_io->ublk_tag;
 	sd_io->req.opcode = SD_OP_REMOVE_OBJ;
 	sd_io->req.obj.oid = oid;
 
@@ -251,4 +233,58 @@ int sheepdog_discard(const struct ublksrv_queue *q,
 	io_uring_prep_writev(sqe, q_ctx->fd, sd_io->iov, 1, 0);
 	io_uring_sqe_set_data(sqe, sd_io);
 	return 1;
+}
+
+int sheepdog_done(const struct ublksrv_queue *q,
+		  struct sd_io_context *sd_io,
+		  const struct io_uring_cqe *cqe)
+{
+	struct sheepdog_queue_ctx *q_ctx =
+		(struct sheepdog_queue_ctx *)q->private_data;
+	int tag = user_data_to_tag(cqe->user_data);
+	unsigned ublk_op = user_data_to_op(cqe->user_data);
+	int ret;
+
+	if (cqe->res) {
+		sd_io->state = SD_STATE_INIT;
+		return cqe->res;
+	}
+	switch (sd_io->state) {
+	case SD_STATE_SEND_REQ:
+		if (ublk_op == UBLK_IO_OP_READ)
+			sd_io->state == SD_STATE_READ_DATA;
+		else
+			sd_io->state == SD_STATE_READ_RSP;
+		ret = -EAGAIN;
+		break;
+	case SD_STATE_READ_DATA:
+		sd_io->state = SD_STATE_READ_RSP;
+		ret = -EAGAIN;
+		break;
+	default:
+		sd_io->state = SD_STATE_INIT;
+		break;
+	}
+	if (sd_io->state == SD_STATE_INIT) {
+		switch (sd_io->rsp.result) {
+		case SD_RES_SUCCESS:
+			ret = 0;
+			break;
+		case SD_RES_NO_OBJ:
+		case SD_RES_NO_VDI:
+		case SD_RES_NO_BASE_VDI:
+			ret = -ENOENT;
+			break;
+		case SD_RES_VDI_EXIST:
+			ret = -EEXIST;
+			break;
+		case SD_RES_INVALID_PARMS:
+			ret = -EINVAL;
+			break;
+		default:
+			ret = -EIO;
+			break;
+		}
+	}
+	return ret;
 }

@@ -604,9 +604,4 @@ static inline uint64_t data_oid_to_ledger_oid(uint64_t oid)
 	return LEDGER_BIT | oid;
 }
 
-static inline uint64_t data_vid_offset(int idx)
-{
-	return offsetof(struct sd_inode, data_vdi_id[idx]);
-}
-
 #endif
