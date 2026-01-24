@@ -157,6 +157,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	}
 
 	tgt_data = (struct sheepdog_tgt_data *)calloc(1, sizeof(*tgt_data));
+	strcpy(tgt_data->vdi_name, vdi_name);
 	if (!cluster_host)
 		strcpy(tgt_data->cluster_host, "127.0.0.1");
 	else
@@ -205,8 +206,10 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	tgt_json.dev_size = p.basic.dev_sectors << 9;
 	ublk_json_write_dev_info(cdev);
 	ublk_json_write_target_base(cdev, &tgt_json);
-	ublk_json_write_tgt_str(cdev, "sheepdog_host", cluster_host);
-	ublk_json_write_tgt_str(cdev, "sheepdog_port", cluster_port);
+	ublk_json_write_tgt_str(cdev, "sheepdog_host",
+				tgt_data->cluster_host);
+	ublk_json_write_tgt_str(cdev, "sheepdog_port",
+				tgt_data->cluster_port);
 	ublk_json_write_tgt_str(cdev, "vdi_name", tgt_data->vdi_name);
 	ublk_json_write_tgt_long(cdev, "vid", tgt_data->vid);
 	ublk_json_write_params(cdev, &p);

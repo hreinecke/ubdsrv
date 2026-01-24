@@ -28,6 +28,14 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
+static uint32_t sheepdog_inode_get_idx(const struct sheepdog_tgt_data *tgt_data,
+				       uint32_t idx)
+{
+	uint32_t vid = tgt_data->inode.data_vdi_id[idx];
+
+	return vid;
+}
+
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *ctx, int num_ctx)
 {
 	ctx->ctxs = (struct sd_io_context *)
@@ -253,6 +261,7 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
 	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx), cow_oid = 0;
+	uint32_t vid = sheepdog_inode_get_idx(tgt_data, idx);
 	int ublk_op = ublksrv_get_op(iod);
 
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
@@ -264,7 +273,14 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		sd_io->req.flags = SD_FLAG_CMD_WRITE;
 	} else
 		sd_io->req.opcode = SD_OP_READ_OBJ;
+	if (vid && vid != tgt_data->vid) {
+		if (ublk_op == UBLK_IO_OP_WRITE)
+			cow_oid = vid_to_data_oid(vid, idx);
+		else
+			oid = vid_to_data_oid(vid, idx);
+	}
 	sd_io->req.obj.oid = oid;
+	sd_io->req.obj.cow_oid = cow_oid;
 	sd_io->req.obj.offset = start;
 	sd_io->req.data_length = total;
 
