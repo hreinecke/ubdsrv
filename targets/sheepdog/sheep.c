@@ -44,7 +44,7 @@ void sheepdog_free_context(struct sheepdog_queue_ctx *ctx)
 	ctx->num_ctx = 0;
 }
 
-int connect_to_sheep(const char *addr, const char *port)
+int connect_to_sheep(struct sheepdog_tgt_data *tgt_data)
 {
 	int sock;
 	struct addrinfo hints;
@@ -58,7 +58,8 @@ int connect_to_sheep(const char *addr, const char *port)
 	hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	e = getaddrinfo(addr, port, &hints, &ai);
+	e = getaddrinfo(tgt_data->cluster_host, tgt_data->cluster_port,
+			&hints, &ai);
 
 	if(e != 0) {
 		ublk_err( "%s: getaddrinfo failed: %s\n",
@@ -81,7 +82,8 @@ int connect_to_sheep(const char *addr, const char *port)
 
 	if (rp == NULL) {
 		ublk_err( "%s: no valid addresses found for %s:%s\n",
-			  __func__, addr, port);
+			  __func__, tgt_data->cluster_host,
+			  tgt_data->cluster_port);
 		sock = -1;
 		goto err;
 	}
@@ -189,7 +191,7 @@ static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 
 /* --- Sheepdog Protocol Handshake --- */
 
-int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid)
+int sheepdog_vdi_lookup(int fd, struct sheepdog_tgt_data *tgt_data)
 {
 	struct sd_req req = {0};
 	struct sd_rsp rsp = {0};
@@ -197,19 +199,18 @@ int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid)
 	char name_buf[SD_MAX_VDI_LEN] = {0};
 	int ret;
 
-	req.opcode = SD_OP_GET_VDI_INFO;
+	req.opcode = SD_OP_LOCK_VDI;
 	req.data_length = buflen;
 	req.flags = SD_FLAG_CMD_WRITE;
-	strncpy(name_buf, name, strlen(name));
 
-	ret = sheepdog_submit(fd, &req, &rsp, (void *)name_buf);
+	ret = sheepdog_submit(fd, &req, &rsp, tgt_data->vdi_name);
 	if (ret < 0) {
 		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
-			  __func__, name, ret);
+			  __func__, tgt_data->vdi_name, ret);
 		return ret;
 	}
 
-	*vid = rsp.vdi.vdi_id;
+	tgt_data->vid = rsp.vdi.vdi_id;
 	return 0;
 }
 

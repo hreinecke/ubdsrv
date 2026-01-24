@@ -27,8 +27,8 @@ struct sd_io_context {
 	void *addr;
 };
 
-int connect_to_sheep(const char *addr, const char *port);
-int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid);
+int connect_to_sheep(struct sheepdog_tgt_data *tgt_data);
+int sheepdog_vdi_lookup(int fd, struct sheepdog_tgt_data *tgt_data);
 int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
 void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);

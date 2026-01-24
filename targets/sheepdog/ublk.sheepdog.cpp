@@ -101,6 +101,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	int fd, opt, lbs = 0, ret;
 	char *vdi_name = NULL;
 	char *cluster_host = NULL, *cluster_port = NULL;
+	struct sheepdog_tgt_data *tgt_data;
 	struct ublksrv_tgt_base_json tgt_json = { 0 };
 	struct ublk_params p = {
 		.types = UBLK_PARAM_TYPE_BASIC | UBLK_PARAM_TYPE_DISCARD |
@@ -158,11 +159,17 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		goto out_free;
 	}
 
+	tgt_data = (struct sheepdog_tgt_data *)calloc(1, sizeof(*tgt_data));
 	if (!cluster_host)
-		cluster_host = strdup("127.0.0.1");
+		strcpy(tgt_data->cluster_host, "127.0.0.1");
+	else
+		strcpy(tgt_data->cluster_host, cluster_host);
 	if (!cluster_port)
-		cluster_port = strdup("7000");
-	fd = connect_to_sheep(cluster_host, cluster_port);
+		strcpy(tgt_data->cluster_port, "7000");
+	else
+		strcpy(tgt_data->cluster_port, cluster_port);
+
+	fd = connect_to_sheep(tgt_data);
 	if (fd < 0) {
 		ublk_err( "%s: cannot connect to sheepdog cluster\n",
 			  __func__);
@@ -170,7 +177,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		goto out_free;
 	}
 
-	ret = sheepdog_vdi_lookup(fd, vdi_name, &vid);
+	ret = sheepdog_vdi_lookup(fd, tgt_data);
 	if (ret < 0) {
 		ublk_err( "%s: failed to get VDI id for '%s'\n",
 			  __func__, vdi_name);
@@ -178,7 +185,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		goto out_free;
 	}
 
-	ret = sheepdog_read_params(fd, vid, &p);
+	ret = sheepdog_read_params(fd, tgt_data->vid, &p);
 	close(fd);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read params for VID %x\n",
@@ -204,7 +211,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	ublk_json_write_tgt_long(cdev, "vid", vid);
 	ublk_json_write_params(cdev, &p);
 
-	dev->tgt.tgt_data = calloc(sizeof(struct sheepdog_tgt_data), 1);
+	dev->tgt.tgt_data = tgt_data;
 
 	ret = sheepdog_setup_tgt(dev, type);
 out_free:
@@ -230,8 +237,7 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 	if (!q_ctx)
 		return -ENOMEM;
 
-	fd = connect_to_sheep(tgt_data->cluster_host,
-			      tgt_data->cluster_port);
+	fd = connect_to_sheep(tgt_data);
 	if (fd < 0) {
 		ublk_err("%s: failed to connect to sheepdog\n",
 			 __func__);
