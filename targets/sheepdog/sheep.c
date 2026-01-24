@@ -173,8 +173,8 @@ static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 	}
 
 	if (rsp->result)
-		ublk_err("%s: sheepdog rsp %d\n",
-			 __func__, rsp->result);
+		ublk_err("%s: sheepdog opcode %x rsp %d\n",
+			 __func__, req->opcode, rsp->result);
 	switch (rsp->result) {
 	case SD_RES_SUCCESS:
 		ret = 0;
@@ -210,6 +210,27 @@ int sheepdog_vdi_lookup(int fd, struct sheepdog_tgt_data *tgt_data)
 	req.opcode = SD_OP_LOCK_VDI;
 	req.data_length = buflen;
 	req.flags = SD_FLAG_CMD_WRITE;
+
+	ret = sheepdog_submit(fd, &req, &rsp, tgt_data->vdi_name);
+	if (ret < 0) {
+		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
+			  __func__, tgt_data->vdi_name, ret);
+		return ret;
+	}
+
+	tgt_data->vid = rsp.vdi.vdi_id;
+	return 0;
+}
+
+int sheepdog_vdi_release(int fd, struct sheepdog_tgt_data *tgt_data)
+{
+	struct sd_req req = {0};
+	struct sd_rsp rsp = {0};
+	int ret;
+
+	req.opcode = SD_OP_RELEASE_VDI;
+	req.vdi.type = LOCK_TYPE_NORMAL;
+	req.vdi.base_vdi_id = tgt_data->vid;
 
 	ret = sheepdog_submit(fd, &req, &rsp, tgt_data->vdi_name);
 	if (ret < 0) {
@@ -264,6 +285,8 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	uint32_t vid = sheepdog_inode_get_idx(tgt_data, idx);
 	int ublk_op = ublksrv_get_op(iod);
 
+	ublk_err ( "%s: submit off %llu, len %llu, start %llu idx %u\n",
+		   __func__, offset, total, start, idx );
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
 	sd_io->req.id = tag;

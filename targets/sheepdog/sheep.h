@@ -29,6 +29,7 @@ struct sd_io_context {
 
 int connect_to_sheep(struct sheepdog_tgt_data *tgt_data);
 int sheepdog_vdi_lookup(int fd, struct sheepdog_tgt_data *tgt_data);
+int sheepdog_vdi_release(int fd, struct sheepdog_tgt_data *tgt_data);
 int sheepdog_read_inode(int fd, struct sheepdog_tgt_data *tgt_data);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
 void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);

@@ -254,10 +254,15 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 
 static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 {
+	struct ublksrv_tgt_info *tgt =
+		(struct ublksrv_tgt_info *)&q->dev->tgt;
+	struct sheepdog_tgt_data *tgt_data =
+		(struct sheepdog_tgt_data *)tgt->tgt_data;
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
 
 	if (q->private_data) {
+		sheepdog_vdi_release(q_ctx->fd, tgt_data);
 		close(q_ctx->fd);
 		free(q_ctx);
 	}
