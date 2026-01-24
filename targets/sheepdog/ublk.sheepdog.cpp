@@ -94,7 +94,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	static const struct option sheepdog_longopts[] = {
 		{ "host",	required_argument, NULL, 'h'},
 		{ "port",	required_argument, NULL, 'p'},
-		{ "name",	required_argument, NULL, 'n' },
+		{ "vdi_name",	required_argument, NULL, 'v' },
 		{ "lbs",	required_argument, NULL, 'b'},
 		{ NULL }
 	};
@@ -129,10 +129,10 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 
 	strcpy(tgt_json.name, "sheepdog");
 
-	while ((opt = getopt_long(argc, argv, "h:p:n:b:",
+	while ((opt = getopt_long(argc, argv, "h:p:v:b:",
 				  sheepdog_longopts, NULL)) != -1) {
 		switch (opt) {
-		case 'n':
+		case 'v':
 			vdi_name = strdup(optarg);
 			break;
 		case 'b':
@@ -153,8 +153,8 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	}
 
 	if (!vdi_name) {
-		errno = ENOMEM;
-		ret = -1;
+		ublk_err( "%s: no VDI name\n", __func__);
+		ret = -EINVAL;
 		goto out_free;
 	}
 
@@ -307,8 +307,8 @@ static void sheepdog_deinit_tgt(const struct ublksrv_dev *dev)
 
 static void sheepdog_cmd_usage()
 {
-	printf("\t-f backing_file [--buffered_io]\n");
-	printf("\t\tdefault is direct IO to backing file\n");
+	printf("\t-v|--vdi_name vdi_name\n");
+	printf("\t[-h|--host host] [-p|--port port]\n");
 }
 
 static const struct ublksrv_tgt_type  sheepdog_tgt_type = {
