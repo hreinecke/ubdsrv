@@ -73,8 +73,6 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *dev, int type)
 	tgt->tgt_ring_depth = info->queue_depth;
 	tgt->nr_fds = 0;
 
-	tgt_data->block_size_shift = p.basic.physical_bs_shift;
-
 	return 0;
 }
 
@@ -123,7 +121,6 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 			.alignment = 511,
 		},
 	};
-	uint32_t vid;
 
 	if (ublksrv_is_recovering(cdev))
 		return sheepdog_recover_tgt(dev, 0);
@@ -185,13 +182,18 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		goto out_free;
 	}
 
-	ret = sheepdog_read_params(fd, tgt_data->vid, &p);
+	ret = sheepdog_read_inode(fd, tgt_data);
 	close(fd);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read params for VID %x\n",
-			  __func__, vid);
+			  __func__, tgt_data->vid);
 		goto out_free;
 	}
+	p.basic.chunk_sectors = SD_DATA_OBJ_SIZE;
+	p.basic.physical_bs_shift = tgt_data->inode.block_size_shift;
+	p.basic.dev_sectors = tgt_data->inode.vdi_size >> 9;
+	p.discard.discard_granularity = p.basic.chunk_sectors;
+	p.discard.max_discard_sectors = p.basic.chunk_sectors;
 	if (lbs) {
 		if (lbs > p.basic.physical_bs_shift) {
 			ublk_err( "%s: logical block size %d too large\n",
@@ -201,14 +203,12 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		p.basic.logical_bs_shift = lbs;
 	}
 	tgt_json.dev_size = p.basic.dev_sectors << 9;
-	p.discard.discard_granularity = p.basic.chunk_sectors;
-	p.discard.max_discard_sectors = p.basic.chunk_sectors;
 	ublk_json_write_dev_info(cdev);
 	ublk_json_write_target_base(cdev, &tgt_json);
 	ublk_json_write_tgt_str(cdev, "sheepdog_host", cluster_host);
 	ublk_json_write_tgt_str(cdev, "sheepdog_port", cluster_port);
-	ublk_json_write_tgt_str(cdev, "vdi_name", vdi_name);
-	ublk_json_write_tgt_long(cdev, "vid", vid);
+	ublk_json_write_tgt_str(cdev, "vdi_name", tgt_data->vdi_name);
+	ublk_json_write_tgt_long(cdev, "vid", tgt_data->vid);
 	ublk_json_write_params(cdev, &p);
 
 	dev->tgt.tgt_data = tgt_data;

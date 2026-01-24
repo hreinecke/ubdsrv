@@ -214,35 +214,28 @@ int sheepdog_vdi_lookup(int fd, struct sheepdog_tgt_data *tgt_data)
 	return 0;
 }
 
-int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p)
+int sheepdog_read_inode(int fd, struct sheepdog_tgt_data *tgt_data)
 {
 	struct sd_io_context *sd_io;
 	struct sd_req *req;
 	struct sd_rsp *rsp;
-	struct sd_inode *inode;
 	int ret;
 
 	sd_io = calloc(1, sizeof(struct sd_io_context));
-	inode = calloc(1, sizeof(struct sd_inode));
 	req = &sd_io->req;
 	rsp = &sd_io->rsp;
 	req->opcode = SD_OP_READ_OBJ;
 	req->data_length = SD_INODE_SIZE;
-	req->obj.oid = vid_to_vdi_oid(vdi_id);
+	req->obj.oid = vid_to_vdi_oid(tgt_data->vid);
 	req->obj.offset = 0;
-	ret = sheepdog_submit(fd, req, rsp, inode);
+	ret = sheepdog_submit(fd, req, rsp, &tgt_data->inode);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read inode from vid '%d', error %d\n",
-			  __func__, vdi_id, ret);
+			  __func__, tgt_data->vid, ret);
 		free(sd_io);
-		free(inode);
 		return ret;
 	}
-	p->basic.chunk_sectors = SD_DATA_OBJ_SIZE;
-	p->basic.physical_bs_shift = inode->block_size_shift;
-	p->basic.dev_sectors = inode->vdi_size >> 9;
 	free(sd_io);
-	free(inode);
 	return 0;
 }
 
@@ -253,7 +246,8 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
 	const struct sheepdog_tgt_data *tgt_data = q->dev->tgt.tgt_data;
-	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
+	uint32_t object_size =
+		(uint32_t)(1 << tgt_data->inode.block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
@@ -285,7 +279,8 @@ int sheepdog_discard(const struct ublksrv_queue *q,
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
 	const struct sheepdog_tgt_data *tgt_data = q->dev->tgt.tgt_data;
-	uint32_t object_size = (uint32_t)(1 << tgt_data->block_size_shift);
+	uint32_t object_size =
+		(uint32_t)(1 << tgt_data->inode.block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t idx = offset / object_size;
 	uint64_t oid = vid_to_data_oid(tgt_data->vid, idx);
