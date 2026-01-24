@@ -96,61 +96,72 @@ err:
 static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 			   void *addr)
 {
-	size_t buflen = req->data_length;
-	struct iovec iov[3], *sendmsg_iov = NULL, *recvmsg_iov = NULL;
-	int sendmsg_iovs = 1, recvmsg_iovs = 1;
+	struct iovec iov[2];
 	bool is_write = req->flags & SD_FLAG_CMD_WRITE;
 	struct msghdr msg;
+	size_t wlen, rlen;
 	int ret;
 
+	if (is_write) {
+		wlen = req->data_length;
+		rlen = 0;
+	} else {
+		wlen = 0;
+		rlen = req->data_length;
+	}
 	iov[0] = (struct iovec){
 		.iov_base = req,
 		.iov_len = sizeof(*req),
 	};
-	sendmsg_iov = &iov[0];
-	if (addr) {
+	if (wlen) {
 		iov[1] = (struct iovec){
 			.iov_base = (void *)addr,
-			.iov_len = buflen,
+			.iov_len = wlen,
 		};
-		iov[2] = (struct iovec){
-			.iov_base = rsp,
-			.iov_len = sizeof(*rsp),
-		};
-		if (is_write) {
-			recvmsg_iov = &iov[2];
-			sendmsg_iovs++;
-		} else {
-			recvmsg_iov = &iov[1];
-			recvmsg_iovs++;
-		}
-	} else {
-		iov[1] = (struct iovec){
-			.iov_base = rsp,
-			.iov_len = sizeof(*rsp),
-		};
-		recvmsg_iov = &iov[1];
 	}
 	msg = (struct msghdr) {
-		.msg_iov = sendmsg_iov,
-		.msg_iovlen = sendmsg_iovs,
+		.msg_iov = &iov[0],
+		.msg_iovlen = wlen ? 2 : 1,
 	};
 	ret = sendmsg(fd, &msg, MSG_DONTWAIT);
 	if (ret < 0) {
-		ublk_err("%s: sendmsg failed, errno %d\n",
+		ublk_err("%s: sendmsg req failed, errno %d\n",
 			 __func__, errno);
 		return -errno;
 	}
+	iov[0] = (struct iovec){
+		.iov_base = rsp,
+		.iov_len = sizeof(*rsp),
+	};
 	msg = (struct msghdr) {
-		.msg_iov = recvmsg_iov,
-		.msg_iovlen = recvmsg_iovs,
+		.msg_iov = &iov[0],
+		.msg_iovlen = 1,
 	};
 	ret = recvmsg(fd, &msg, MSG_WAITALL);
 	if (ret < 0) {
-		ublk_err("%s: recvmsg failed, errno %d\n",
+		ublk_err("%s: recvmsg rsp failed, errno %d\n",
 			 __func__, errno);
 		return -errno;
 	}
+	if (rlen > rsp->data_length)
+		rlen = rsp->data_length;
+	if (rlen) {
+		iov[0] = (struct iovec){
+			.iov_base = (void *)addr,
+			.iov_len = rlen,
+		};
+		msg = (struct msghdr) {
+			.msg_iov = &iov[0],
+			.msg_iovlen = 1,
+		};
+		ret = recvmsg(fd, &msg, MSG_WAITALL);
+		if (ret < 0) {
+			ublk_err("%s: recvmsg data failed, errno %d\n",
+				 __func__, errno);
+			return -errno;
+		}
+	}
+
 	if (rsp->result)
 		ublk_err("%s: sheepdog rsp %d\n",
 			 __func__, rsp->result);
@@ -191,7 +202,7 @@ int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid)
 	req.flags = SD_FLAG_CMD_WRITE;
 	strncpy(name_buf, name, strlen(name));
 
-	ret = sheepdog_submit(fd, &req, &rsp, (void *)name);
+	ret = sheepdog_submit(fd, &req, &rsp, (void *)name_buf);
 	if (ret < 0) {
 		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
 			  __func__, name, ret);
@@ -204,24 +215,33 @@ int sheepdog_vdi_lookup(int fd, const char *name, uint32_t *vid)
 
 int sheepdog_read_params(int fd, uint32_t vdi_id, struct ublk_params *p)
 {
-	struct sd_req req = {0};
-	struct sd_rsp rsp = {0};
-	struct sd_inode inode = { 0 };
+	struct sd_io_context *sd_io;
+	struct sd_req *req;
+	struct sd_rsp *rsp;
+	struct sd_inode *inode;
 	int ret;
 
-	req.opcode = SD_OP_READ_OBJ;
-	req.data_length = SD_INODE_SIZE;
-	req.obj.oid = vid_to_vdi_oid(vdi_id);
-	req.obj.offset = 0;
-	ret = sheepdog_submit(fd, &req, &rsp, &inode);
+	sd_io = calloc(1, sizeof(struct sd_io_context));
+	inode = calloc(1, sizeof(struct sd_inode));
+	req = &sd_io->req;
+	rsp = &sd_io->rsp;
+	req->opcode = SD_OP_READ_OBJ;
+	req->data_length = SD_INODE_SIZE;
+	req->obj.oid = vid_to_vdi_oid(vdi_id);
+	req->obj.offset = 0;
+	ret = sheepdog_submit(fd, req, rsp, inode);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read inode from vid '%d', error %d\n",
 			  __func__, vdi_id, ret);
+		free(sd_io);
+		free(inode);
 		return ret;
 	}
 	p->basic.chunk_sectors = SD_DATA_OBJ_SIZE;
-	p->basic.physical_bs_shift = inode.block_size_shift;
-	p->basic.dev_sectors = inode.vdi_size >> 9;
+	p->basic.physical_bs_shift = inode->block_size_shift;
+	p->basic.dev_sectors = inode->vdi_size >> 9;
+	free(sd_io);
+	free(inode);
 	return 0;
 }
 

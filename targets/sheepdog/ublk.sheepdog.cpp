@@ -98,7 +98,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 		{ "lbs",	required_argument, NULL, 'b'},
 		{ NULL }
 	};
-	int fd, opt, lbs, ret;
+	int fd, opt, lbs = 0, ret;
 	char *vdi_name = NULL;
 	char *cluster_host = NULL, *cluster_port = NULL;
 	struct ublksrv_tgt_base_json tgt_json = { 0 };
@@ -223,22 +223,18 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 	struct sheepdog_tgt_data *tgt_data =
 		(struct sheepdog_tgt_data *)tgt->tgt_data;
 	struct sheepdog_queue_ctx *q_ctx;
-	int fd, ret;
+	int fd;
 
 	q_ctx = (struct sheepdog_queue_ctx *)
 		calloc(1, sizeof(struct sheepdog_queue_ctx));
 	if (!q_ctx)
 		return -ENOMEM;
 
-	ret = sheepdog_allocate_context(q_ctx, tgt->tgt_ring_depth);
-	if (ret < 0) {
-		free(q_ctx);
-		return -ENOMEM;
-	}
 	fd = connect_to_sheep(tgt_data->cluster_host,
 			      tgt_data->cluster_port);
 	if (fd < 0) {
-		sheepdog_free_context(q_ctx);
+		ublk_err("%s: failed to connect to sheepdog\n",
+			 __func__);
 		free(q_ctx);
 		return fd;
 	}
@@ -252,9 +248,10 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
 
-	close(q_ctx->fd);
-	sheepdog_free_context(q_ctx);
-	free(q_ctx);
+	if (q->private_data) {
+		close(q_ctx->fd);
+		free(q_ctx);
+	}
 }
 
 static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
