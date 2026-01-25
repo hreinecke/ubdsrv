@@ -7,11 +7,11 @@
 extern "C" {
 #endif
 
-struct sheepdog_tgt_data {
+struct sheepdog_vdi {
 	char cluster_host[256];
 	char cluster_port[16];
 	char vdi_name[256];
-	unsigned long vid;
+	uint32_t vid;
 	struct sd_inode inode;
 };
 
@@ -27,10 +27,10 @@ struct sd_io_context {
 	void *addr;
 };
 
-int connect_to_sheep(struct sheepdog_tgt_data *tgt_data);
-int sheepdog_vdi_lookup(int fd, struct sheepdog_tgt_data *tgt_data);
-int sheepdog_vdi_release(int fd, struct sheepdog_tgt_data *tgt_data);
-int sheepdog_read_inode(int fd, struct sheepdog_tgt_data *tgt_data);
+int connect_to_sheep(struct sheepdog_vdi *vdi);
+int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi);
+int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi);
+int sheepdog_read_inode(int fd, struct sheepdog_vdi *vdi);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
 void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);
 int sheepdog_rw(const struct ublksrv_queue *q,
