@@ -392,12 +392,12 @@ int sheepdog_discard(const struct ublksrv_queue *q,
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
-	const struct sheepdog_vdi *vdi = q->dev->tgt.tgt_data;
-	uint32_t object_size =
-		(uint32_t)(1 << vdi->inode.block_size_shift);
+	const struct sheepdog_vdi *ubd_vdi = q->dev->tgt.tgt_data;
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t idx = offset / object_size;
-	uint64_t oid = vid_to_data_oid(vdi->vid, idx);
+	uint32_t total = iod->nr_sectors << 9;
+	uint64_t start = offset % SD_DATA_OBJ_SIZE;
+	uint32_t idx = offset / SD_DATA_OBJ_SIZE;
+	uint64_t oid = vid_to_data_oid(ubd_vdi->vid, idx);
 
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
