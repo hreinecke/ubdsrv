@@ -12,6 +12,7 @@ struct sheepdog_vdi {
 	char cluster_port[16];
 	char vdi_name[256];
 	uint32_t vid;
+	pthread_mutex_t inode_lock;
 	struct sd_inode inode;
 };
 
@@ -21,7 +22,15 @@ struct sheepdog_queue_ctx {
 	struct sd_io_context *ctxs;
 };
 
+enum sd_io_type {
+	SHEEP_READ,
+	SHEEP_WRITE,
+	SHEEP_CREATE,
+	SHEEP_DISCARD,
+};
+
 struct sd_io_context {
+	enum sd_io_type type;
 	struct sd_req req;
 	struct sd_rsp rsp;
 	void *addr;

@@ -6,6 +6,7 @@
 #include <sys/epoll.h>
 #include <linux/falloc.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #include "ublksrv_tgt.h"
 #include "sheepdog_proto.h"
@@ -158,6 +159,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *dev, int type, int argc, char
 	}
 
 	vdi = (struct sheepdog_vdi *)calloc(1, sizeof(*vdi));
+	pthread_mutex_init(&vdi->inode_lock, NULL);
 	strcpy(vdi->vdi_name, vdi_name);
 	if (!cluster_host)
 		strcpy(vdi->cluster_host, "127.0.0.1");
@@ -314,7 +316,11 @@ static int sheepdog_handle_io_async(const struct ublksrv_queue *q,
 
 static void sheepdog_deinit_tgt(const struct ublksrv_dev *dev)
 {
-	free(dev->tgt.tgt_data);
+	struct sheepdog_vdi *vdi =
+		(struct sheepdog_vdi *)dev->tgt.tgt_data;
+
+	pthread_mutex_destroy(&vdi->inode_lock);
+	free(vdi);
 }
 
 static void sheepdog_cmd_usage()

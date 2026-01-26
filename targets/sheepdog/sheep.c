@@ -20,6 +20,7 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <time.h>
+#include <pthread.h>
 
 #include <linux/ioctl.h>
 
@@ -28,10 +29,14 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
-static uint32_t sheepdog_inode_get_idx(const struct sheepdog_vdi *vdi,
+static uint32_t sheepdog_inode_get_idx(struct sheepdog_vdi *ubd_vdi,
 				       uint32_t idx)
 {
-	uint32_t vid = vdi->inode.data_vdi_id[idx];
+	uint32_t vid;
+
+	pthread_mutex_lock(&ubd_vdi->inode_lock);
+	vid = ubd_vdi->inode.data_vdi_id[idx];
+	pthread_mutex_unlock(&ubd_vdi->inode_lock);
 
 	return vid;
 }
@@ -52,7 +57,7 @@ void sheepdog_free_context(struct sheepdog_queue_ctx *ctx)
 	ctx->num_ctx = 0;
 }
 
-int connect_to_sheep(struct sheepdog_vdi *vdi)
+int connect_to_sheep(struct sheepdog_vdi *ubd_vdi)
 {
 	int sock;
 	struct addrinfo hints;
@@ -66,7 +71,7 @@ int connect_to_sheep(struct sheepdog_vdi *vdi)
 	hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	e = getaddrinfo(vdi->cluster_host, vdi->cluster_port,
+	e = getaddrinfo(ubd_vdi->cluster_host, ubd_vdi->cluster_port,
 			&hints, &ai);
 
 	if(e != 0) {
@@ -90,8 +95,8 @@ int connect_to_sheep(struct sheepdog_vdi *vdi)
 
 	if (rp == NULL) {
 		ublk_err( "%s: no valid addresses found for %s:%s\n",
-			  __func__, vdi->cluster_host,
-			  vdi->cluster_port);
+			  __func__, ubd_vdi->cluster_host,
+			  ubd_vdi->cluster_port);
 		sock = -1;
 		goto err;
 	}
@@ -246,21 +251,64 @@ int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi)
 int sheepdog_read_inode(int fd, struct sheepdog_vdi *vdi)
 {
 	struct sd_io_context *sd_io;
+	struct sd_inode *inode;
 	struct sd_req *req;
 	struct sd_rsp *rsp;
 	int ret;
 
 	sd_io = calloc(1, sizeof(struct sd_io_context));
+	inode = calloc(1, sizeof(struct sd_inode));
 	req = &sd_io->req;
 	rsp = &sd_io->rsp;
 	req->opcode = SD_OP_READ_OBJ;
 	req->data_length = SD_INODE_SIZE;
 	req->obj.oid = vid_to_vdi_oid(vdi->vid);
 	req->obj.offset = 0;
-	ret = sheepdog_submit(fd, req, rsp, &vdi->inode);
+	ret = sheepdog_submit(fd, req, rsp, inode);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read inode from vid '%d', error %d\n",
 			  __func__, vdi->vid, ret);
+		free(sd_io);
+		return ret;
+	}
+	pthread_mutex_lock(&vdi->inode_lock);
+	memcpy(&vdi->inode, inode, sizeof(*inode));
+	pthread_mutex_unlock(&vdi->inode_lock);
+	free(inode);
+	free(sd_io);
+	return 0;
+}
+
+int sheepdog_update_vid(int fd, struct sheepdog_vdi *ubd_vdi,
+			uint64_t req_oid)
+{
+	struct sd_io_context *sd_io;
+	struct sd_req *req;
+	struct sd_rsp *rsp;
+	uint32_t vid = ubd_vdi->vid, idx;
+	uint64_t oid;
+	int ret;
+
+	oid = vid_to_vdi_oid(vid);
+	idx = data_oid_to_idx(req_oid);
+
+	pthread_mutex_lock(&ubd_vdi->inode_lock);
+	ubd_vdi->inode.data_vdi_id[idx] = vid;
+	pthread_mutex_unlock(&ubd_vdi->inode_lock);
+
+	sd_io = calloc(1, sizeof(struct sd_io_context));
+	req = &sd_io->req;
+	rsp = &sd_io->rsp;
+	req->opcode = SD_OP_WRITE_OBJ;
+	req->flags = SD_FLAG_CMD_WRITE;
+	req->data_length = sizeof(vid);
+	req->obj.oid = vid_to_vdi_oid(ubd_vdi->vid);
+	req->obj.cow_oid = 0;
+	req->obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
+	ret = sheepdog_submit(fd, req, rsp, &vid);
+	if (ret < 0) {
+		ublk_err( "%s: failed to update inode from vid '%d', error %d\n",
+			  __func__, ubd_vdi->vid, ret);
 		free(sd_io);
 		return ret;
 	}
@@ -274,17 +322,23 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
-	const struct sheepdog_vdi *vdi = q->dev->tgt.tgt_data;
+	struct sheepdog_vdi *ubd_vdi = q->dev->tgt.tgt_data;
 	uint32_t object_size =
-		(uint32_t)(1 << vdi->inode.block_size_shift);
+		(uint32_t)(1 << ubd_vdi->inode.block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
-	uint64_t start = offset % object_size;
-	uint32_t idx = offset / object_size;
-	uint64_t oid = vid_to_data_oid(vdi->inode.vdi_id, idx), cow_oid = 0;
-	uint32_t vid = sheepdog_inode_get_idx(vdi, idx);
+	uint64_t start = offset % SD_DATA_OBJ_SIZE;
+	uint32_t idx = offset / SD_DATA_OBJ_SIZE;
+	uint64_t oid = vid_to_data_oid(ubd_vdi->vid, idx), cow_oid = 0;
+	uint32_t vid = sheepdog_inode_get_idx(ubd_vdi, idx);
 	int ublk_op = ublksrv_get_op(iod);
+	size_t len = SD_DATA_OBJ_SIZE - start;
+	int ret = 0;
 
+	if (total > len) {
+		ublk_err("%s: access beyond object size\n", __func__);
+		ret = -EIO;
+	}
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
 	sd_io->req.id = tag;
@@ -293,21 +347,40 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		sd_io->req.flags = SD_FLAG_CMD_WRITE;
 	} else
 		sd_io->req.opcode = SD_OP_READ_OBJ;
-	if (vid && vid != vdi->inode.vdi_id) {
+	if (vid && vid != ubd_vdi->vid) {
 		if (ublk_op == UBLK_IO_OP_WRITE)
 			cow_oid = vid_to_data_oid(vid, idx);
 		else
 			oid = vid_to_data_oid(vid, idx);
 	}
-	ublk_err ( "%s: off %llu, len %llu, start %llu oid %llx idx %u\n",
-		   __func__, offset, total, start, oid, idx );
+	ublk_err ( "%s: off %llu, len %llu, vid %u oid %llx cow %llx idx %u\n",
+		   __func__, offset, total, vid, oid, cow_oid, idx );
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.cow_oid = cow_oid;
 	sd_io->req.obj.offset = start;
 	sd_io->req.data_length = total;
 
-	return sheepdog_submit(q_ctx->fd, &sd_io->req,
-			       &sd_io->rsp, (void *)iod->addr);
+	if (vid && !cow_oid)
+		goto submit;
+	switch (sd_io->type) {
+	case SHEEP_WRITE:
+		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
+		if (cow_oid)
+			sd_io->req.flags |= SD_FLAG_CMD_COW;
+		break;
+	case SHEEP_READ:
+		return 0;
+	}
+submit:
+	ret = sheepdog_submit(q_ctx->fd, &sd_io->req,
+			      &sd_io->rsp, (void *)iod->addr);
+	if (ret)
+		return ret;
+
+	if (sd_io->req.opcode == SD_OP_CREATE_AND_WRITE_OBJ)
+		sheepdog_update_vid(q_ctx->fd, ubd_vdi, oid);
+
+	return ret;
 }
 
 int sheepdog_discard(const struct ublksrv_queue *q,
