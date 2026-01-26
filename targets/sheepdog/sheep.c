@@ -177,9 +177,6 @@ static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 		}
 	}
 
-	if (rsp->result)
-		ublk_err("%s: sheepdog opcode %x rsp %d\n",
-			 __func__, req->opcode, rsp->result);
 	switch (rsp->result) {
 	case SD_RES_SUCCESS:
 		ret = 0;
@@ -323,8 +320,6 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
 	struct sheepdog_vdi *ubd_vdi = q->dev->tgt.tgt_data;
-	uint32_t object_size =
-		(uint32_t)(1 << ubd_vdi->inode.block_size_shift);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % SD_DATA_OBJ_SIZE;
@@ -343,18 +338,21 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
 	sd_io->req.id = tag;
 	if (ublk_op == UBLK_IO_OP_WRITE) {
+		sd_io->type = SHEEP_WRITE;
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		sd_io->req.flags = SD_FLAG_CMD_WRITE;
-	} else
+	} else {
+		sd_io->type = SHEEP_READ;
 		sd_io->req.opcode = SD_OP_READ_OBJ;
+	}
 	if (vid && vid != ubd_vdi->vid) {
 		if (ublk_op == UBLK_IO_OP_WRITE)
 			cow_oid = vid_to_data_oid(vid, idx);
 		else
 			oid = vid_to_data_oid(vid, idx);
 	}
-	ublk_err ( "%s: off %llu, len %llu, vid %u oid %llx cow %llx idx %u\n",
-		   __func__, offset, total, vid, oid, cow_oid, idx );
+	ublk_err ( "%s: tag %u vid %u oid %llx cow %llx off %llu len %llu\n",
+		   __func__, tag, vid, oid, cow_oid, start, total);
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.cow_oid = cow_oid;
 	sd_io->req.obj.offset = start;
@@ -367,6 +365,7 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		if (cow_oid)
 			sd_io->req.flags |= SD_FLAG_CMD_COW;
+		sd_io->type = SHEEP_CREATE;
 		break;
 	case SHEEP_READ:
 		return 0;
@@ -374,8 +373,12 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 submit:
 	ret = sheepdog_submit(q_ctx->fd, &sd_io->req,
 			      &sd_io->rsp, (void *)iod->addr);
-	if (ret)
+	if (ret) {
+		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 sd_io->req.opcode, sd_io->rsp.result);
 		return ret;
+	}
 
 	if (sd_io->req.opcode == SD_OP_CREATE_AND_WRITE_OBJ)
 		sheepdog_update_vid(q_ctx->fd, ubd_vdi, oid);
