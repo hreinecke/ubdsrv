@@ -57,7 +57,7 @@ void sheepdog_free_context(struct sheepdog_queue_ctx *ctx)
 	ctx->num_ctx = 0;
 }
 
-int connect_to_sheep(struct sheepdog_vdi *ubd_vdi)
+int connect_to_sheep(const char *cluster_host, const char *cluster_port)
 {
 	int sock;
 	struct addrinfo hints;
@@ -71,7 +71,7 @@ int connect_to_sheep(struct sheepdog_vdi *ubd_vdi)
 	hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	e = getaddrinfo(ubd_vdi->cluster_host, ubd_vdi->cluster_port,
+	e = getaddrinfo(cluster_host, cluster_port,
 			&hints, &ai);
 
 	if(e != 0) {
@@ -95,8 +95,7 @@ int connect_to_sheep(struct sheepdog_vdi *ubd_vdi)
 
 	if (rp == NULL) {
 		ublk_err( "%s: no valid addresses found for %s:%s\n",
-			  __func__, ubd_vdi->cluster_host,
-			  ubd_vdi->cluster_port);
+			  __func__, cluster_host, cluster_port);
 		sock = -1;
 		goto err;
 	}

@@ -8,8 +8,6 @@ extern "C" {
 #endif
 
 struct sheepdog_vdi {
-	char cluster_host[256];
-	char cluster_port[16];
 	char vdi_name[256];
 	uint32_t vid;
 	pthread_mutex_t inode_lock;
@@ -36,7 +34,7 @@ struct sd_io_context {
 	void *addr;
 };
 
-int connect_to_sheep(struct sheepdog_vdi *vdi);
+int connect_to_sheep(const char *cluster_host, const char *cluster_port);
 int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi);
 int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi);
 int sheepdog_read_inode(int fd, struct sheepdog_vdi *vdi);
