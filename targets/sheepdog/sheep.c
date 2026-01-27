@@ -335,7 +335,7 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
 	uint32_t vid = sheepdog_inode_get_idx(sd_vdi, idx);
-	uint64_t oid = 0, cow_oid = 0;
+	uint64_t oid = vid_to_data_oid(vid, idx), cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int ret = 0;
@@ -382,7 +382,6 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 			sd_io->req.opcode = SD_OP_WRITE_OBJ;
 			ublk_err("%s: write oid %llx\n",
 				 __func__, oid);
-			oid = vid_to_data_oid(vid, idx);
 		}
 		if (sd_io->type == SHEEP_CREATE) {
 			/* Update inode for following I/O */
@@ -394,7 +393,7 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		    ublk_op == UBLK_IO_OP_WRITE_ZEROES)) {
 		if (!vid)
 			return 0;
-		sd_io->type = SHEEP_WRITE;
+		sd_io->type = SHEEP_DISCARD;
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_WRITE;
 		pthread_mutex_lock(&sd_vdi->inode_lock);
