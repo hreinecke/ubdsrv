@@ -302,10 +302,6 @@ int sheepdog_update_vid(int fd, struct sheepdog_vdi *ubd_vdi,
 	oid = vid_to_vdi_oid(vid);
 	idx = data_oid_to_idx(req_oid);
 
-	pthread_mutex_lock(&ubd_vdi->inode_lock);
-	ubd_vdi->inode.data_vdi_id[idx] = vid;
-	pthread_mutex_unlock(&ubd_vdi->inode_lock);
-
 	sd_io = calloc(1, sizeof(struct sd_io_context));
 	req = &sd_io->req;
 	rsp = &sd_io->rsp;
@@ -317,8 +313,8 @@ int sheepdog_update_vid(int fd, struct sheepdog_vdi *ubd_vdi,
 	req->obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
 	ret = sheepdog_submit(fd, req, rsp, &vid);
 	if (ret < 0) {
-		ublk_err( "%s: failed to update inode from vid '%x', error %d\n",
-			  __func__, ubd_vdi->vid, ret);
+		ublk_err( "%s: failed to update inode oid %llx from vid '%x', error %d\n",
+			  __func__, req->obj.oid, vid, ret);
 		free(sd_io);
 		return ret;
 	}
@@ -386,6 +382,13 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 			sd_io->req.opcode = SD_OP_WRITE_OBJ;
 			ublk_err("%s: write oid %llx\n",
 				 __func__, oid);
+			oid = vid_to_data_oid(vid, idx);
+		}
+		if (sd_io->type == SHEEP_CREATE) {
+			/* Update inode for following I/O */
+			pthread_mutex_lock(&sd_vdi->inode_lock);
+			sd_vdi->inode.data_vdi_id[idx] = vid;
+			pthread_mutex_unlock(&sd_vdi->inode_lock);
 		}
 	} else if ((ublk_op == UBLK_IO_OP_DISCARD ||
 		    ublk_op == UBLK_IO_OP_WRITE_ZEROES)) {
@@ -439,5 +442,8 @@ submit:
 		return ret;
 	}
 
+	if (sd_io->type == SHEEP_CREATE)
+		ret = sheepdog_update_vid(q_ctx->fd, sd_vdi,
+					  sd_io->req.obj.oid);
 	return ret;
 }
