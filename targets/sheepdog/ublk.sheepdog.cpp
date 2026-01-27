@@ -15,6 +15,7 @@
 struct sheepdog_dev {
 	char cluster_host[256];
 	char cluster_port[16];
+	char vdi_name[256];
 	struct sheepdog_vdi vdi;
 };
 
@@ -44,7 +45,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 				__func__, ret);
 		return ret;
 	}
-	strncpy(dev->vdi.vdi_name, vdi_name, 256);
+	strncpy(dev->vdi_name, vdi_name, 256);
 
 	ret = ublk_json_read_target_ulong_info(cdev, "vid", &vid);
 	if (ret) {
@@ -87,7 +88,8 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 
 static int sheepdog_recover_tgt(struct ublksrv_dev *ub_dev, int type)
 {
-	ub_dev->tgt.tgt_data = calloc(1, sizeof(struct sheepdog_vdi));
+	ub_dev->tgt.tgt_data =
+		(struct sheepdog_dev *)calloc(1, sizeof(struct sheepdog_dev));
 
 	return sheepdog_setup_tgt(ub_dev, type);
 }
@@ -167,7 +169,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 
 	dev = (struct sheepdog_dev *)calloc(1, sizeof(*dev));
 	pthread_mutex_init(&dev->vdi.inode_lock, NULL);
-	strcpy(dev->vdi.vdi_name, vdi_name);
+	strcpy(dev->vdi_name, vdi_name);
 	if (!cluster_host)
 		strcpy(dev->cluster_host, "127.0.0.1");
 	else
@@ -283,6 +285,8 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		struct ublk_io_tgt *io)
 {
 	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
+	struct sheepdog_dev *dev =
+		(struct sheepdog_dev *)q->dev->tgt.tgt_data;
 	const struct ublksrv_io_desc *iod = data->iod;
 	uint64_t total = iod->nr_sectors << 9;
 	unsigned ublk_op = ublksrv_get_op(iod);
@@ -296,7 +300,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_READ:
 	case UBLK_IO_OP_WRITE:
-		ret = sheepdog_rw(q, iod, sd_io, data->tag);
+		ret = sheepdog_rw(q, &dev->vdi, iod, sd_io, data->tag);
 		break;
 	default:
 		ret = -EINVAL;
@@ -319,13 +323,13 @@ static int sheepdog_handle_io_async(const struct ublksrv_queue *q,
 	return 0;
 }
 
-static void sheepdog_deinit_tgt(const struct ublksrv_dev *dev)
+static void sheepdog_deinit_tgt(const struct ublksrv_dev *ub_dev)
 {
-	struct sheepdog_vdi *vdi =
-		(struct sheepdog_vdi *)dev->tgt.tgt_data;
+	struct sheepdog_dev *dev =
+		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
 
-	pthread_mutex_destroy(&vdi->inode_lock);
-	free(vdi);
+	pthread_mutex_destroy(&dev->vdi.inode_lock);
+	free(dev);
 }
 
 static void sheepdog_cmd_usage()

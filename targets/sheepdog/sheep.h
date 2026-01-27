@@ -41,6 +41,7 @@ int sheepdog_read_inode(int fd, struct sheepdog_vdi *vdi);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
 void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);
 int sheepdog_rw(const struct ublksrv_queue *q,
+		struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io, int tag);
 int sheepdog_discard(const struct ublksrv_queue *q,
