@@ -116,7 +116,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		.types = UBLK_PARAM_TYPE_BASIC | UBLK_PARAM_TYPE_DISCARD |
 			UBLK_PARAM_TYPE_DMA_ALIGN,
 		.basic = {
-			.attrs                  = UBLK_ATTR_VOLATILE_CACHE | UBLK_ATTR_FUA,
+			.attrs                  = UBLK_ATTR_FUA,
 			.logical_bs_shift	= 9,
 			.physical_bs_shift	= 12,
 			.io_opt_shift	= 12,
