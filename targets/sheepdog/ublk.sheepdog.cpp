@@ -221,7 +221,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 				dev->cluster_port);
 	ublk_json_write_tgt_str(cdev, "vdi_name",
 				dev->vdi.vdi_name);
-	ublk_json_write_tgt_long(cdev, "vid", dev->vdi.vid);
+	ublk_json_write_tgt_ulong(cdev, "vid", dev->vdi.vid);
 	ublk_json_write_params(cdev, &p);
 
 	ub_dev->tgt.tgt_data = dev;
