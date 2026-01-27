@@ -211,7 +211,7 @@ static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 
 /* --- Sheepdog Protocol Handshake --- */
 
-int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi)
+int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi, const char *vdi_name)
 {
 	struct sd_req req = {0};
 	struct sd_rsp rsp = {0};
@@ -223,10 +223,10 @@ int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi)
 	req.data_length = buflen;
 	req.flags = SD_FLAG_CMD_WRITE;
 
-	ret = sheepdog_submit(fd, &req, &rsp, vdi->vdi_name);
+	ret = sheepdog_submit(fd, &req, &rsp, (void *)vdi_name);
 	if (ret < 0) {
 		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
-			  __func__, vdi->vdi_name, ret);
+			  __func__, vdi_name, ret);
 		return ret;
 	}
 
@@ -244,14 +244,13 @@ int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi)
 	req.vdi.type = LOCK_TYPE_NORMAL;
 	req.vdi.base_vdi_id = vdi->vid;
 
-	ret = sheepdog_submit(fd, &req, &rsp, vdi->vdi_name);
+	ret = sheepdog_submit(fd, &req, &rsp, NULL);
 	if (ret < 0) {
-		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
-			  __func__, vdi->vdi_name, ret);
+		ublk_err( "%s: failed to release vdi '%x', error %d\n",
+			  __func__, vdi->vid, ret);
 		return ret;
 	}
 
-	vdi->vid = rsp.vdi.vdi_id;
 	return 0;
 }
 

@@ -32,18 +32,19 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 	const struct ublksrv_ctrl_dev_info *info =
 		ublksrv_ctrl_get_dev_info(cdev);
 	int ret;
+	char vdi_name[256];
 	unsigned long vid;
 	struct ublk_params p;
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
 
-	ret = ublk_json_read_target_str_info(cdev, "vdi_name",
-					     dev->vdi.vdi_name);
+	ret = ublk_json_read_target_str_info(cdev, "vdi_name", vdi_name);
 	if (ret < 0) {
 		ublk_err( "%s: read vdi name failed, error %d\n",
 				__func__, ret);
 		return ret;
 	}
+	strncpy(dev->vdi.vdi_name, vdi_name, 256);
 
 	ret = ublk_json_read_target_ulong_info(cdev, "vid", &vid);
 	if (ret) {
@@ -184,7 +185,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		goto out_free;
 	}
 
-	ret = sheepdog_vdi_lookup(fd, &dev->vdi);
+	ret = sheepdog_vdi_lookup(fd, &dev->vdi, vdi_name);
 	if (ret < 0) {
 		ublk_err( "%s: failed to get VDI id for '%s'\n",
 			  __func__, vdi_name);
@@ -219,8 +220,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 				dev->cluster_host);
 	ublk_json_write_tgt_str(cdev, "sheepdog_port",
 				dev->cluster_port);
-	ublk_json_write_tgt_str(cdev, "vdi_name",
-				dev->vdi.vdi_name);
+	ublk_json_write_tgt_str(cdev, "vdi_name", vdi_name);
 	ublk_json_write_tgt_ulong(cdev, "vid", dev->vdi.vid);
 	ublk_json_write_params(cdev, &p);
 
