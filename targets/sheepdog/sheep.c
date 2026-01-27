@@ -339,7 +339,7 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
 	uint32_t vid = sheepdog_inode_get_idx(ubd_vdi, idx);
-	uint64_t oid = vid_to_data_oid(vid, idx), cow_oid = 0;
+	uint64_t oid = 0, cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int ret = 0;
@@ -355,6 +355,8 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		memset((void *)iod->addr, 0, total);
 		return 0;
 	}
+	if (ublk_op == UBLK_IO_OP_DISCARD && !vid)
+		return 0;
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
 	sd_io->req.id = tag;
@@ -365,18 +367,20 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		if (!vid) {
 			sd_io->type = SHEEP_CREATE;
 			sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
-			oid = vid_to_data_oid(ubd_vdi->vid, idx);
-			ublk_err("%s: create new oid %llx\n",
-				 __func__, oid);
+			vid = ubd_vdi->vid;
+			oid = vid_to_data_oid(vid, idx);
+			ublk_err("%s: create new oid %llx from vid %x\n",
+				 __func__, oid, vid);
 		} else if (!is_data_obj_writable(ubd_vdi, idx)) {
 			/* use copy-on-write */
 			sd_io->type = SHEEP_CREATE;
 			sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 			sd_io->req.flags |= SD_FLAG_CMD_COW;
 			cow_oid = oid;
-			oid = vid_to_data_oid(ubd_vdi->vid, idx);
-			ublk_err("%s: create new obj %llx cow %llx\n",
-				 __func__, oid, cow_oid);
+			vid = ubd_vdi->vid;
+			oid = vid_to_data_oid(vid, idx);
+			ublk_err("%s: create new obj %llx cow %llx from vid %x\n",
+				 __func__, oid, cow_oid, vid);
 		} else {
 			sd_io->type = SHEEP_WRITE;
 			sd_io->req.opcode = SD_OP_WRITE_OBJ;
@@ -391,16 +395,28 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_WRITE;
 		pthread_mutex_lock(&ubd_vdi->inode_lock);
-		ubd_vdi->inode.data_vdi_id[idx] = 0;
+		if (ubd_vdi->inode.data_vdi_id[idx] != vid) {
+			ublk_err("%s: invalid inode data index %x for vid %x\n",
+				 ubd_vdi->inode.data_vdi_id[idx], vid);
+			vid = 0;
+		} else
+			ubd_vdi->inode.data_vdi_id[idx] = 0;
 		pthread_mutex_unlock(&ubd_vdi->inode_lock);
+		if (!vid)
+			return -ENOENT;
 		start = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
 		total = sizeof(vid);
-		sd_io->addr = (void *)&vid;
-		oid = vid_to_vdi_oid(ubd_vdi->vid);
+		sd_io->addr = (void *)&ubd_vdi->inode.data_vdi_id[idx];
+		oid = vid_to_vdi_oid(vid);
+		ublk_err("%s: discard oid %llx of vid %x\n",
+			 __func__, oid, vid);
 	} else {
 		sd_io->type = SHEEP_READ;
 		sd_io->req.opcode = SD_OP_READ_OBJ;
 		sd_io->addr = (void *)iod->addr;
+		oid = vid_to_data_oid(vid, idx);
+		ublk_err("%s: read oid %llx from vid %x\n",
+			 __func__, oid, vid);
 	}
 
 	sd_io->req.obj.oid = oid;
