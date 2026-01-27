@@ -122,7 +122,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		},
 
 		.discard = {
-			.max_discard_sectors	= UINT_MAX >> 9,
+			.max_discard_sectors	= SD_DATA_OBJ_SIZE >> 9,
 			.max_discard_segments	= 1,
 		},
 		.dma = {
@@ -199,8 +199,8 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 			  __func__, dev->vdi.vid);
 		goto out_free;
 	}
-	p.basic.chunk_sectors = SD_DATA_OBJ_SIZE;
 	p.basic.physical_bs_shift = dev->vdi.inode.block_size_shift;
+	p.basic.chunk_sectors = 1 << (p.basic.physical_bs_shift - 9);
 	p.basic.dev_sectors = dev->vdi.inode.vdi_size >> 9;
 	p.discard.discard_granularity = p.basic.chunk_sectors;
 	p.discard.max_discard_sectors = p.basic.chunk_sectors;
@@ -294,8 +294,6 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE_ZEROES:
 	case UBLK_IO_OP_DISCARD:
-		ret = sheepdog_discard(q, iod, sd_io, data->tag);
-		break;
 	case UBLK_IO_OP_READ:
 	case UBLK_IO_OP_WRITE:
 		ret = sheepdog_rw(q, iod, sd_io, data->tag);
