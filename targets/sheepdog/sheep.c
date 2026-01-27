@@ -222,11 +222,12 @@ int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi, const char *vdi_name)
 	req.opcode = SD_OP_LOCK_VDI;
 	req.data_length = buflen;
 	req.flags = SD_FLAG_CMD_WRITE;
+	strcpy(name_buf, vdi_name);
 
-	ret = sheepdog_submit(fd, &req, &rsp, (void *)vdi_name);
+	ret = sheepdog_submit(fd, &req, &rsp, name_buf);
 	if (ret < 0) {
 		ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
-			  __func__, vdi_name, ret);
+			  __func__, name_buf, ret);
 		return ret;
 	}
 
