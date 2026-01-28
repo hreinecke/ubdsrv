@@ -332,6 +332,17 @@ retry:
 	return ret < 0 ? ret : 0;
 }
 
+static int sd_refresh_required(int fd, struct sheepdog_vdi *sd_vdi)
+{
+	uint32_t dummy;
+	int need_reload = 0, ret;
+
+	/* Dummy read of the inode oid */
+	ret = sd_read_object(fd, vid_to_vdi_oid(sd_vdi->vid),
+			     (char *)&dummy, 0, sizeof(dummy), &need_reload);
+	return need_reload;
+}
+
 int sheepdog_read_inode(int fd, struct sheepdog_vdi *sd_vdi)
 {
 	int need_reload = 0, ret;
@@ -398,7 +409,7 @@ int sheepdog_update_vid(int fd, struct sheepdog_vdi *ubd_vdi,
 	return 0;
 }
 
-static int sheepdog_prep_read(struct sheepdog_vdi *sd_vdi,
+static int sheepdog_prep_read(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
 {
@@ -415,8 +426,16 @@ static int sheepdog_prep_read(struct sheepdog_vdi *sd_vdi,
 
 	/* No object present, return NULL */
 	if (!vid) {
-		memset((void *)iod->addr, 0, total);
-		return 0;
+		if (!sd_refresh_required(fd, sd_vdi)) {
+			memset((void *)iod->addr, 0, total);
+			return 0;
+		}
+		ret = sheepdog_read_inode(fd, sd_vdi);
+		if (ret) {
+			ublk_err("%s: failed to reload inode\n",
+				 __func__);
+			return ret;
+		}
 	}
 	sd_io->type = SHEEP_READ;
 	sd_io->addr = (void *)iod->addr;
@@ -573,7 +592,7 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		ret = sheepdog_prep_write(sd_vdi, iod, sd_io);
 		break;
 	case UBLK_IO_OP_READ:
-		ret = sheepdog_prep_read(sd_vdi, iod, sd_io);
+		ret = sheepdog_prep_read(q_ctx->fd, sd_vdi, iod, sd_io);
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:
