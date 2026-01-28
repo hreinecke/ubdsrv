@@ -32,7 +32,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 		ublksrv_get_ctrl_dev(ub_dev);
 	const struct ublksrv_ctrl_dev_info *info =
 		ublksrv_ctrl_get_dev_info(cdev);
-	int fd, ret;
+	int ret;
 	char vdi_name[256];
 	unsigned long vid;
 	struct ublk_params p;
@@ -77,21 +77,6 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 		return ret;
 	}
 
-	fd = connect_to_sheep(dev->cluster_host, dev->cluster_port);
-	if (fd < 0) {
-		ublk_err( "%s: cannot connect to sheepdog cluster\n",
-			  __func__);
-		return -errno;
-	}
-
-	/* Re-read inode to fetch updates */
-	ret = sheepdog_read_inode(fd, &dev->vdi);
-	close(fd);
-	if (ret < 0) {
-		ublk_err( "%s: failed to read params for VID %x\n",
-			  __func__, dev->vdi.vid);
-		return ret;
-	}
 	tgt->io_data_size = sizeof(struct ublk_io_tgt) +
 		sizeof(struct sd_io_context);
 	tgt->dev_size = dev->vdi.inode.vdi_size >> 9;
@@ -210,7 +195,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		goto out_free;
 	}
 	dev->vdi.vid = vid;
-	ret = sheepdog_read_inode(fd, &dev->vdi);
+	ret = sd_read_inode(fd, &dev->vdi, false);
 	close(fd);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read params for VID %x\n",

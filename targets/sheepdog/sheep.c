@@ -343,33 +343,50 @@ static int sd_refresh_required(int fd, struct sheepdog_vdi *sd_vdi)
 	return need_reload;
 }
 
-int sheepdog_read_inode(int fd, struct sheepdog_vdi *sd_vdi)
+int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
 {
 	int need_reload = 0, ret;
 	struct sd_inode *inode;
 	uint32_t vid = sd_vdi->vid;
+	size_t len;
 
 	inode = calloc(1, SD_INODE_SIZE);
 	if (!inode)
 		return -ENOMEM;
 	pthread_mutex_lock(&sd_vdi->inode_lock);
-	ret = sd_read_object(fd, vid_to_vdi_oid(vid),
-			     (char *)inode, 0, SD_INODE_SIZE,
-			     &need_reload);
-	if (ret == 0 && inode->snap_ctime) {
-		/*
-		 * Internal sheepdog race, resolve VID for
-		 * read-onlye snapshot.
-		 */
-		ret = sheepdog_vdi_lookup(fd, inode->name, CURRENT_VDI_ID,
-					  NULL, &vid, false);
-		if (ret == 0)
+	if (snapshot) {
+		ret = sheepdog_vdi_lookup(fd, sd_vdi->inode.name,
+					  CURRENT_VDI_ID, NULL, &vid, false);
+		if (ret == 0) {
 			ret = sd_read_object(fd, vid_to_vdi_oid(vid),
-					     (char *)inode, 0, SD_INODE_SIZE,
+					     (char *)inode, 0,
+					     SD_INODE_HEADER_SIZE,
 					     &need_reload);
+			if (ret == 0)
+				memcpy(&sd_vdi->inode, inode,
+				       SD_INODE_HEADER_SIZE);
+		}
+	} else {
+		ret = sd_read_object(fd, vid_to_vdi_oid(vid),
+				     (char *)inode, 0, SD_INODE_SIZE,
+				     &need_reload);
+		if (ret == 0 && inode->snap_ctime) {
+			/*
+			 * Internal sheepdog race, resolve VID for
+			 * read-onlye snapshot.
+			 */
+			ret = sheepdog_vdi_lookup(fd, inode->name,
+						  CURRENT_VDI_ID,
+						  NULL, &vid, false);
+			if (ret == 0)
+				ret = sd_read_object(fd, vid_to_vdi_oid(vid),
+						     (char *)inode, 0,
+						     SD_INODE_SIZE,
+						     &need_reload);
+		}
+		if (ret == 0)
+			memcpy(&sd_vdi->inode, inode, SD_INODE_SIZE);
 	}
-	if (ret == 0)
-		memcpy(&sd_vdi->inode, inode, sizeof(*inode));
 	pthread_mutex_unlock(&sd_vdi->inode_lock);
 	free(inode);
 	return ret;
@@ -430,7 +447,7 @@ static int sheepdog_prep_read(int fd, struct sheepdog_vdi *sd_vdi,
 			memset((void *)iod->addr, 0, total);
 			return 0;
 		}
-		ret = sheepdog_read_inode(fd, sd_vdi);
+		ret = sd_read_inode(fd, sd_vdi, false);
 		if (ret) {
 			ublk_err("%s: failed to reload inode\n",
 				 __func__);
