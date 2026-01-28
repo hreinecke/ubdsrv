@@ -380,8 +380,9 @@ int sheepdog_update_vid(int fd, struct sheepdog_vdi *ubd_vdi,
 	sd_io = calloc(1, sizeof(struct sd_io_context));
 	req = &sd_io->req;
 	rsp = &sd_io->rsp;
+	req->proto_ver = SD_PROTO_VER;
 	req->opcode = SD_OP_WRITE_OBJ;
-	req->flags = SD_FLAG_CMD_WRITE;
+	req->flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_TGT;
 	req->data_length = sizeof(vid);
 	req->obj.oid = vid_to_vdi_oid(ubd_vdi->vid);
 	req->obj.cow_oid = 0;
@@ -420,7 +421,9 @@ static int sheepdog_prep_read(struct sheepdog_vdi *sd_vdi,
 	sd_io->type = SHEEP_READ;
 	sd_io->addr = (void *)iod->addr;
 
+	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_READ_OBJ;
+	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.offset = start;
 	sd_io->req.data_length = total;
@@ -453,8 +456,10 @@ static int sheepdog_prep_discard(struct sheepdog_vdi *sd_vdi,
 		return 0;
 	}
 	sd_io->type = SHEEP_DISCARD;
+	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_WRITE_OBJ;
 	sd_io->req.flags |= SD_FLAG_CMD_WRITE;
+	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 	pthread_mutex_lock(&sd_vdi->inode_lock);
 	if (sd_vdi->inode.data_vdi_id[idx] != vid) {
 		ublk_err("%s: invalid inode data index %x for vid %x\n",
@@ -491,7 +496,9 @@ static int sheepdog_prep_write(struct sheepdog_vdi *sd_vdi,
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 
+	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
+	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 	sd_io->addr = (void *)iod->addr;
 	/* create object if none exists */
 	pthread_mutex_lock(&sd_vdi->inode_lock);
