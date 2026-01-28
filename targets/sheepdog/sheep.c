@@ -260,7 +260,7 @@ int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi)
 	int ret;
 
 	req.opcode = SD_OP_RELEASE_VDI;
-	req.vdi.type = LOCK_TYPE_NORMAL;
+	req.vdi.type = LOCK_TYPE_SHARED;
 	req.vdi.base_vdi_id = vdi->vid;
 
 	ret = sheepdog_submit(fd, &req, &rsp, NULL);
