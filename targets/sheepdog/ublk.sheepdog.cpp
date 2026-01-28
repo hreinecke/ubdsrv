@@ -97,6 +97,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 	tgt->dev_size = dev->vdi.inode.vdi_size >> 9;
 	tgt->tgt_ring_depth = info->queue_depth;
 	tgt->nr_fds = 0;
+	tgt->extra_ios = 0;
 
 	return 0;
 }
@@ -288,7 +289,8 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 		(struct sheepdog_queue_ctx *)q->private_data;
 
 	if (q->private_data) {
-		sheepdog_vdi_release(q_ctx->fd, &dev->vdi);
+		if (dev)
+			sheepdog_vdi_release(q_ctx->fd, &dev->vdi);
 		close(q_ctx->fd);
 		free(q_ctx);
 	}
@@ -339,8 +341,10 @@ static void sheepdog_deinit_tgt(const struct ublksrv_dev *ub_dev)
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
 
-	pthread_mutex_destroy(&dev->vdi.inode_lock);
-	free(dev);
+	if (dev) {
+		pthread_mutex_destroy(&dev->vdi.inode_lock);
+//		free(dev);
+	}
 }
 
 static void sheepdog_cmd_usage()
