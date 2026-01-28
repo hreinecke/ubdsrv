@@ -35,7 +35,8 @@ struct sd_io_context {
 };
 
 int connect_to_sheep(const char *cluster_host, const char *cluster_port);
-int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi, const char *vdi_name);
+int sheepdog_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
+		const char *tag, uint32_t *vid, bool snapshot);
 int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi);
 int sheepdog_read_inode(int fd, struct sheepdog_vdi *vdi);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);

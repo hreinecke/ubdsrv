@@ -214,18 +214,29 @@ static int sheepdog_submit(int fd, struct sd_req *req, struct sd_rsp *rsp,
 
 /* --- Sheepdog Protocol Handshake --- */
 
-int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi, const char *vdi_name)
+int sheepdog_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
+		const char *tag, uint32_t *vid, bool snapshot)
 {
 	struct sd_req req = {0};
 	struct sd_rsp rsp = {0};
-	size_t buflen = SD_MAX_VDI_LEN;
-	char name_buf[SD_MAX_VDI_LEN] = {0};
+	size_t buflen = SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN;
+	char name_buf[SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN] = {0};
 	int ret;
 
-	req.opcode = SD_OP_LOCK_VDI;
+	if (snapshot)
+		req.opcode = SD_OP_GET_VDI_INFO;
+	else
+		req.opcode = SD_OP_LOCK_VDI;
+	req.proto_ver = SD_PROTO_VER;
 	req.data_length = buflen;
 	req.flags = SD_FLAG_CMD_WRITE;
-	strcpy(name_buf, vdi_name);
+	req.vdi.type = LOCK_TYPE_SHARED;
+	req.vdi.snapid = snapid;
+	memset(name_buf, 0, buflen);
+	strncpy(name_buf, vdi_name, SD_MAX_VDI_LEN - 1);
+	if (tag)
+		strncpy(name_buf + SD_MAX_VDI_LEN, tag,
+			SD_MAX_VDI_TAG_LEN - 1);
 
 	ret = sheepdog_submit(fd, &req, &rsp, name_buf);
 	if (ret < 0) {
@@ -238,7 +249,7 @@ int sheepdog_vdi_lookup(int fd, struct sheepdog_vdi *vdi, const char *vdi_name)
 		return ret;
 	}
 
-	vdi->vid = rsp.vdi.vdi_id;
+	*vid = rsp.vdi.vdi_id;
 	return 0;
 }
 

@@ -124,6 +124,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	};
 	int fd, opt, lbs = 0, ret;
 	char *vdi_name = NULL;
+	uint32_t vid;
 	char *cluster_host = NULL, *cluster_port = NULL;
 	struct sheepdog_dev *dev;
 	struct ublksrv_tgt_base_json tgt_json = { 0 };
@@ -202,12 +203,12 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		goto out_free;
 	}
 
-	ret = sheepdog_vdi_lookup(fd, &dev->vdi, vdi_name);
+	ret = sheepdog_vdi_lookup(fd, vdi_name, 0, NULL, &vid, false);
 	if (ret < 0) {
 		close(fd);
 		goto out_free;
 	}
-
+	dev->vdi.vid = vid;
 	ret = sheepdog_read_inode(fd, &dev->vdi);
 	close(fd);
 	if (ret < 0) {
