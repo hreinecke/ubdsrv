@@ -204,8 +204,6 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 
 	ret = sheepdog_vdi_lookup(fd, &dev->vdi, vdi_name);
 	if (ret < 0) {
-		ublk_err( "%s: failed to get VDI id for '%s'\n",
-			  __func__, vdi_name);
 		close(fd);
 		goto out_free;
 	}
@@ -306,9 +304,6 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	uint64_t total = iod->nr_sectors << 9;
 	unsigned ublk_op = ublksrv_get_op(iod);
 	int ret;
-
-	if (ublk_op == UBLK_IO_OP_FLUSH)
-		return 0;
 
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE_ZEROES:
