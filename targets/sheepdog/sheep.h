@@ -16,8 +16,6 @@ struct sheepdog_vdi {
 
 struct sheepdog_queue_ctx {
 	int fd;
-	int num_ctx;
-	struct sd_io_context *ctxs;
 };
 
 enum sd_io_type {
@@ -39,8 +37,6 @@ int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 		const char *tag, uint32_t *vid, bool snapshot);
 int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);
   int sd_read_inode(int fd, struct sheepdog_vdi *vdi, bool snapshot);
-int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
-void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);
 int sheepdog_rw(const struct ublksrv_queue *q,
 		struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,

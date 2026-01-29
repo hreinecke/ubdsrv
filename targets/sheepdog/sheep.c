@@ -54,22 +54,6 @@ static inline bool is_data_obj_writable(struct sheepdog_vdi *sd_vdi,
 	return writable;
 }
 
-int sheepdog_allocate_context(struct sheepdog_queue_ctx *ctx, int num_ctx)
-{
-	ctx->ctxs = (struct sd_io_context *)
-		calloc(num_ctx, sizeof(struct sd_io_context));
-	if (!ctx->ctxs)
-		return -ENOMEM;
-	ctx->num_ctx = num_ctx;
-}
-
-void sheepdog_free_context(struct sheepdog_queue_ctx *ctx)
-{
-	free(ctx->ctxs);
-	ctx->ctxs = NULL;
-	ctx->num_ctx = 0;
-}
-
 int connect_to_sheep(const char *cluster_host, const char *cluster_port)
 {
 	int sock;
