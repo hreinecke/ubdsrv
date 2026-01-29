@@ -35,9 +35,9 @@ struct sd_io_context {
 };
 
 int connect_to_sheep(const char *cluster_host, const char *cluster_port);
-int sheepdog_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
+int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 		const char *tag, uint32_t *vid, bool snapshot);
-int sheepdog_vdi_release(int fd, struct sheepdog_vdi *vdi);
+int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);
   int sd_read_inode(int fd, struct sheepdog_vdi *vdi, bool snapshot);
 int sheepdog_allocate_context(struct sheepdog_queue_ctx *q_ctx, int num_ctx);
 void sheepdog_free_context(struct sheepdog_queue_ctx *q_ctx);
@@ -45,9 +45,6 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io, int tag);
-int sheepdog_discard(const struct ublksrv_queue *q,
-		     const struct ublksrv_io_desc *iod,
-		     struct sd_io_context *sd_io, int tag);
 
 #ifdef __cplusplus
 }

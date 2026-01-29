@@ -189,7 +189,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		goto out_free;
 	}
 
-	ret = sheepdog_vdi_lookup(fd, vdi_name, 0, NULL, &vid, false);
+	ret = sd_vdi_lookup(fd, vdi_name, 0, NULL, &vid, false);
 	if (ret < 0) {
 		close(fd);
 		goto out_free;
@@ -275,7 +275,7 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 
 	if (q->private_data) {
 		if (dev)
-			sheepdog_vdi_release(q_ctx->fd, &dev->vdi);
+			sd_vdi_release(q_ctx->fd, &dev->vdi);
 		close(q_ctx->fd);
 		free(q_ctx);
 	}
