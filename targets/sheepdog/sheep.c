@@ -228,8 +228,8 @@ int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 			ublk_err( "%s: vdi '%s' is locked\n",
 			  __func__, name_buf);
 		else
-			ublk_err( "%s: failed to lookup vdi '%s', error %d\n",
-				  __func__, name_buf, ret);
+			ublk_err( "%s: failed to lookup vdi '%s', result %d\n",
+				  __func__, name_buf, sd_io.rsp.result);
 		return ret;
 	}
 
@@ -248,8 +248,8 @@ int sd_vdi_release(int fd, struct sheepdog_vdi *vdi)
 
 	ret = sd_submit(fd, &sd_io);
 	if (ret < 0) {
-		ublk_err( "%s: failed to release vdi '%x', error %d\n",
-			  __func__, vdi->vid, ret);
+		ublk_err( "%s: failed to release vdi '%x', result %d\n",
+			  __func__, vdi->vid, sd_io.rsp.result);
 		return ret;
 	}
 
