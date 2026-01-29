@@ -29,25 +29,27 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
-static uint32_t sheepdog_inode_get_idx(struct sheepdog_vdi *ubd_vdi,
+#define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode.block_size_shift)
+
+static uint32_t sheepdog_inode_get_idx(struct sheepdog_vdi *sd_vdi,
 				       uint32_t idx)
 {
 	uint32_t vid;
 
-	pthread_mutex_lock(&ubd_vdi->inode_lock);
-	vid = ubd_vdi->inode.data_vdi_id[idx];
-	pthread_mutex_unlock(&ubd_vdi->inode_lock);
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	vid = sd_vdi->inode.data_vdi_id[idx];
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
 
 	return vid;
 }
 
 /* locking is done by the caller */
-static inline bool is_data_obj_writable(struct sheepdog_vdi *ubd_vdi,
+static inline bool is_data_obj_writable(struct sheepdog_vdi *sd_vdi,
 					uint32_t idx)
 {
 	bool writable;
 
-	writable = (ubd_vdi->vid == ubd_vdi->inode.data_vdi_id[idx]);
+	writable = (sd_vdi->vid == sd_vdi->inode.data_vdi_id[idx]);
 
 	return writable;
 }
@@ -426,11 +428,11 @@ int sheepdog_update_vid(int fd, struct sheepdog_vdi *ubd_vdi,
 	return 0;
 }
 
-static int sheepdog_prep_read(int fd, struct sheepdog_vdi *sd_vdi,
+static int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
 {
-	uint32_t object_size = SD_DATA_OBJ_SIZE;
+	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
@@ -468,14 +470,20 @@ static int sheepdog_prep_read(int fd, struct sheepdog_vdi *sd_vdi,
 	ublk_err("%s: read oid %llx from vid %x\n",
 		 __func__, oid, vid);
 
-	return 1;
+	ret = sheepdog_submit(fd, &sd_io->req,
+			       &sd_io->rsp, sd_io->addr);
+	if (ret < 0)
+		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 sd_io->req.opcode, sd_io->rsp.result);
+	return ret;
 }
 
-static int sheepdog_prep_discard(struct sheepdog_vdi *sd_vdi,
+static int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io, bool write_zeroes)
 {
-	uint32_t object_size = SD_DATA_OBJ_SIZE;
+	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
@@ -515,14 +523,20 @@ static int sheepdog_prep_discard(struct sheepdog_vdi *sd_vdi,
 
 	ublk_err("%s: discard oid %llx of vid %x\n",
 			 __func__, sd_io->req.obj.oid, vid);
-	return 1;
+	ret = sheepdog_submit(fd, &sd_io->req,
+			      &sd_io->rsp, sd_io->addr);
+	if (ret < 0)
+		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 sd_io->req.opcode, sd_io->rsp.result);
+	return ret;
 }
 
-static int sheepdog_prep_write(struct sheepdog_vdi *sd_vdi,
+static int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
 {
-	uint32_t object_size = SD_DATA_OBJ_SIZE;
+	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
@@ -531,6 +545,7 @@ static int sheepdog_prep_write(struct sheepdog_vdi *sd_vdi,
 	uint64_t oid = 0, cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
+	int ret;
 
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
@@ -577,7 +592,19 @@ static int sheepdog_prep_write(struct sheepdog_vdi *sd_vdi,
 	sd_io->req.data_length = total;
 	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
-	return 1;
+	ret = sheepdog_submit(fd, &sd_io->req,
+			      &sd_io->rsp, sd_io->addr);
+	if (ret < 0) {
+		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 sd_io->req.opcode, sd_io->rsp.result);
+		return ret;
+	}
+
+	if (sd_io->type == SHEEP_CREATE)
+		ret = sheepdog_update_vid(fd, sd_vdi,
+					  sd_io->req.obj.oid);
+	return ret;
 }
 
 int sheepdog_rw(const struct ublksrv_queue *q,
@@ -587,11 +614,10 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 {
 	struct sheepdog_queue_ctx *q_ctx =
 		(struct sheepdog_queue_ctx *)q->private_data;
-	uint32_t object_size = SD_DATA_OBJ_SIZE;
+	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
-	uint32_t idx = offset / object_size;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int ret = 0;
@@ -606,14 +632,14 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 	sd_io->req.id = tag;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-		ret = sheepdog_prep_write(sd_vdi, iod, sd_io);
+		ret = sd_exec_write(q_ctx->fd, sd_vdi, iod, sd_io);
 		break;
 	case UBLK_IO_OP_READ:
-		ret = sheepdog_prep_read(q_ctx->fd, sd_vdi, iod, sd_io);
+		ret = sd_exec_read(q_ctx->fd, sd_vdi, iod, sd_io);
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:
-		ret = sheepdog_prep_discard(sd_vdi, iod, sd_io,
+		ret = sd_exec_discard(q_ctx->fd, sd_vdi, iod, sd_io,
 			ublk_op == UBLK_IO_OP_DISCARD ? false : true);
 		break;
 	default:
@@ -622,25 +648,5 @@ int sheepdog_rw(const struct ublksrv_queue *q,
 		ret = -EOPNOTSUPP;
 		break;
 	}
-	if (ret < 1)
-		return ret;
-
-	ublk_err ( "%s: tag %u opcode %u oid %llx cow %llx off %llu len %llu\n",
-		   __func__, tag, sd_io->req.opcode,
-		   sd_io->req.obj.oid, sd_io->req.obj.cow_oid,
-		   sd_io->req.obj.offset, sd_io->req.data_length);
-submit:
-	ret = sheepdog_submit(q_ctx->fd, &sd_io->req,
-			      &sd_io->rsp, sd_io->addr);
-	if (ret) {
-		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
-			 __func__, sd_io->req.id, sd_io->req.obj.oid,
-			 sd_io->req.opcode, sd_io->rsp.result);
-		return ret;
-	}
-
-	if (sd_io->type == SHEEP_CREATE)
-		ret = sheepdog_update_vid(q_ctx->fd, sd_vdi,
-					  sd_io->req.obj.oid);
 	return ret;
 }
