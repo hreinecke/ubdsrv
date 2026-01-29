@@ -381,29 +381,40 @@ int sd_update_vid(int fd, struct sheepdog_vdi *sd_vdi,
 	struct sd_io_context *sd_io;
 	struct sd_req *req;
 	struct sd_rsp *rsp;
-	uint32_t vid = sd_vdi->vid, idx;
+	uint32_t vid, idx;
 	uint64_t oid;
-	int ret;
-
-	oid = vid_to_vdi_oid(vid);
-	idx = data_oid_to_idx(req_oid);
+	int need_reload = 0, ret;
 
 	sd_io = calloc(1, sizeof(struct sd_io_context));
-	req = &sd_io->req;
-	rsp = &sd_io->rsp;
+	if (!sd_io)
+		return -ENOMEM;
+retry:
+	vid = sd_vdi->vid;
+	oid = vid_to_vdi_oid(sd_vdi->vid);
+	idx = data_oid_to_idx(req_oid);
+
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_WRITE_OBJ;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_TGT;
 	sd_io->req.data_length = sizeof(vid);
 	sd_io->req.obj.oid = vid_to_vdi_oid(sd_vdi->vid);
-	sd_io->req.obj.cow_oid = 0;
 	sd_io->req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
 	sd_io->addr = &vid;
 	ret = sd_submit(fd, sd_io);
-	if (ret < 0) {
+	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
+		need_reload = 2;
+	else if (sd_io->rsp.result == SD_RES_READONLY)
+		need_reload = 1;
+	else if (ret < 0) {
 		ublk_err( "%s: update inode oid %llx failed, rsp %d err %d\n",
 			  __func__, sd_io->req.obj.oid,
 			  sd_io->rsp.result, ret);
+	}
+	if (need_reload) {
+		sd_read_inode(fd, sd_vdi, false);
+		need_reload = 0;
+		memset(sd_io, 0, sizeof(*sd_io));
+		goto retry;
 	}
 	free(sd_io);
 	return ret;
