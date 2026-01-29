@@ -541,10 +541,11 @@ static int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 	sd_io->addr = (void *)iod->addr;
-	/* create object if none exists */
+retry:
 	pthread_mutex_lock(&sd_vdi->inode_lock);
 	vid = sd_vdi->inode.data_vdi_id[idx];
 	if (!vid) {
+		/* Create new object */
 		vid = sd_vdi->vid;
 		oid = vid_to_data_oid(vid, idx);
 		/* Update inode */
@@ -583,6 +584,13 @@ static int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
 	ret = sd_submit(fd, sd_io);
+	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED ||
+	    sd_io->rsp.result == SD_RES_READONLY) {
+		bool is_snapshot = (sd_io->rsp.result == SD_RES_READONLY);
+		ret = sd_read_inode(fd, sd_vdi, is_snapshot);
+		if (!ret)
+			goto retry;
+	}
 	if (ret < 0) {
 		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
