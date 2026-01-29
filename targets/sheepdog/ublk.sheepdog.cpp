@@ -181,7 +181,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	else
 		strcpy(dev->cluster_port, cluster_port);
 
-	fd = connect_to_sheep(dev->cluster_host, dev->cluster_port);
+	fd = sd_connect(dev->cluster_host, dev->cluster_port);
 	if (fd < 0) {
 		ublk_err( "%s: cannot connect to sheepdog cluster\n",
 			  __func__);
@@ -252,7 +252,7 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 	if (!q_ctx)
 		return -ENOMEM;
 
-	fd = connect_to_sheep(dev->cluster_host, dev->cluster_port);
+	fd = sd_connect(dev->cluster_host, dev->cluster_port);
 	if (fd < 0) {
 		ublk_err("%s: failed to connect to sheepdog\n",
 			 __func__);

@@ -54,7 +54,7 @@ static inline bool is_data_obj_writable(struct sheepdog_vdi *sd_vdi,
 	return writable;
 }
 
-int connect_to_sheep(const char *cluster_host, const char *cluster_port)
+int sd_connect(const char *cluster_host, const char *cluster_port)
 {
 	int sock;
 	struct addrinfo hints;
@@ -256,7 +256,7 @@ int sd_vdi_release(int fd, struct sheepdog_vdi *vdi)
 	return 0;
 }
 
-int sd_read_object(int fd, uint64_t oid, char *buf, size_t offset,
+static int sd_read_object(int fd, uint64_t oid, char *buf, size_t offset,
 		size_t len, int *need_reload)
 {
 	struct sd_io_context *sd_io;
@@ -378,8 +378,8 @@ int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
 	return ret;
 }
 
-int sd_update_vid(int fd, struct sheepdog_vdi *sd_vdi,
-			uint64_t req_oid)
+static int sd_update_inode(int fd, struct sheepdog_vdi *sd_vdi,
+			   uint64_t req_oid)
 {
 	struct sd_io_context *sd_io;
 	struct sd_req *req;
@@ -620,8 +620,8 @@ retry:
 	}
 
 	if (sd_io->type == SHEEP_CREATE)
-		ret = sd_update_vid(fd, sd_vdi,
-				    sd_io->req.obj.oid);
+		ret = sd_update_inode(fd, sd_vdi,
+				      sd_io->req.obj.oid);
 	return ret;
 }
 

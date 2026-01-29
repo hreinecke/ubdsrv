@@ -32,7 +32,7 @@ struct sd_io_context {
 	void *addr;
 };
 
-int connect_to_sheep(const char *cluster_host, const char *cluster_port);
+int sd_connect(const char *cluster_host, const char *cluster_port);
 int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 		const char *tag, uint32_t *vid, bool snapshot);
 int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);
