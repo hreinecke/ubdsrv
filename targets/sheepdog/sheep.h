@@ -18,15 +18,15 @@ struct sheepdog_queue_ctx {
 	int fd;
 };
 
-enum sd_io_type {
-	SHEEP_READ,
-	SHEEP_WRITE,
-	SHEEP_CREATE,
-	SHEEP_DISCARD,
+enum sd_io_state {
+	SD_SEND_REQ,
+	SD_SEND_DATA,
+	SD_RECV_RSP,
+	SD_RECV_DATA,
 };
 
 struct sd_io_context {
-	enum sd_io_type type;
+	enum sd_io_state state;
 	struct sd_req req;
 	struct sd_rsp rsp;
 	void *addr;

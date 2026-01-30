@@ -451,7 +451,6 @@ recheck:
 		vid = sd_inode_get_idx(sd_vdi, idx);
 		goto recheck;
 	}
-	sd_io->type = SHEEP_READ;
 	sd_io->addr = (void *)iod->addr;
 
 	sd_io->req.proto_ver = SD_PROTO_VER;
@@ -501,7 +500,6 @@ recheck:
 			return ret;
 		goto recheck;
 	}
-	sd_io->type = SHEEP_DISCARD;
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_WRITE_OBJ;
 	sd_io->req.flags |= SD_FLAG_CMD_WRITE;
@@ -570,7 +568,6 @@ retry:
 		/* Update inode */
 		sd_vdi->inode.data_vdi_id[idx] = vid;
 
-		sd_io->type = SHEEP_CREATE;
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		ublk_err("%s: create new oid %llx from vid %x\n",
 			 __func__, oid, vid);
@@ -582,14 +579,12 @@ retry:
 		/* Update inode */
 		sd_vdi->inode.data_vdi_id[idx] = vid;
 
-		sd_io->type = SHEEP_CREATE;
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_COW;
 		ublk_err("%s: create new obj %llx cow %llx from vid %x\n",
 			 __func__, oid, cow_oid, vid);
 	} else {
 		oid = vid_to_data_oid(vid, idx);
-		sd_io->type = SHEEP_WRITE;
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		ublk_err("%s: write oid %llx\n",
 			 __func__, oid);
@@ -617,7 +612,7 @@ retry:
 		return ret;
 	}
 
-	if (sd_io->type == SHEEP_CREATE)
+	if (sd_io->req.opcode == SD_OP_CREATE_AND_WRITE_OBJ)
 		ret = sd_update_inode(fd, sd_vdi,
 				      sd_io->req.obj.oid);
 	return ret;
