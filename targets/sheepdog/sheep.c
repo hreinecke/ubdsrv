@@ -255,7 +255,7 @@ int sd_vdi_release(int fd, struct sheepdog_vdi *vdi)
 }
 
 static int sd_read_object(int fd, struct sd_io_context *sd_io,
-		uint64_t oid, char *buf, size_t offset,
+		uint64_t oid, void *buf, size_t offset,
 		size_t len, int *need_reload)
 {
 	int ret;
@@ -442,7 +442,7 @@ int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 	uint64_t oid = vid_to_data_oid(vid, idx);
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
-	int ret = 0;
+	int ret = 0, need_reload;
 
 recheck:
 	/* No object present, return NULL */
@@ -457,20 +457,11 @@ recheck:
 		vid = sd_inode_get_idx(sd_vdi, idx);
 		goto recheck;
 	}
-	sd_io->addr = (void *)iod->addr;
-
-	sd_io->req.proto_ver = SD_PROTO_VER;
-	sd_io->req.opcode = SD_OP_READ_OBJ;
-	sd_io->req.flags |= SD_FLAG_CMD_TGT;
-	sd_io->req.obj.oid = oid;
-	sd_io->req.obj.offset = start;
-	sd_io->req.data_length = total;
-	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
 	ublk_err("%s: read oid %llx from vid %x\n",
 		 __func__, oid, vid);
-
-	ret = sd_submit(fd, sd_io);
+	ret = sd_read_object(fd, sd_io, oid, (void *)iod->addr,
+			     start, total, &need_reload);
 	if (ret < 0)
 		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
