@@ -478,15 +478,15 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
-	uint32_t vid;
+	uint32_t new_vid = 0, orig_vid;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int need_reload = 0, ret = 0;
 
 recheck:
-	vid = sd_inode_get_idx(sd_vdi, idx);
+	orig_vid = sd_inode_get_idx(sd_vdi, idx);
 	/* No object present, return NULL */
-	if (!vid) {
+	if (!orig_vid) {
 		if (!sd_refresh_required(fd, sd_vdi)) {
 			if (write_zeroes)
 				memset((void *)iod->addr, 0, total);
@@ -503,26 +503,27 @@ recheck:
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 
 	pthread_mutex_lock(&sd_vdi->inode_lock);
-	vid = sd_vdi->inode.data_vdi_id[idx];
-	sd_vdi->inode.data_vdi_id[idx] = 0;
-	sd_io->addr = (void *)&sd_vdi->inode.data_vdi_id[idx];
-	sd_io->req.obj.oid = vid_to_vdi_oid(vid);
-	sd_io->req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
-	sd_io->req.data_length = sizeof(vid);
+	orig_vid = sd_vdi->inode.data_vdi_id[idx];
+	sd_vdi->inode.data_vdi_id[idx] = new_vid;
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
+
+	sd_io->addr = (void *)&new_vid;
+	sd_io->req.obj.oid = vid_to_vdi_oid(orig_vid);
+	sd_io->req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(orig_vid) * idx;
+	sd_io->req.data_length = sizeof(new_vid);
 	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
 	ublk_err("%s: discard oid %llx of vid %x\n",
-			 __func__, sd_io->req.obj.oid, vid);
+			 __func__, sd_io->req.obj.oid, orig_vid);
 	ret = sd_submit(fd, sd_io);
 	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
 		need_reload = 2;
 	else if (sd_io->rsp.result == SD_RES_READONLY) {
 		need_reload = 1;
 	} else if (ret < 0) {
-		/* Reset to original value */
-		sd_vdi->inode.data_vdi_id[idx] = vid;
+		/* Something happened during I/O, re-read inode */
+		need_reload = 2;
 	}
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
 	if (need_reload) {
 		need_reload = 0;
 		ret = sd_read_inode(fd, sd_vdi, need_reload == 1);
