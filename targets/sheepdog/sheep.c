@@ -29,8 +29,6 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
-#define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode.block_size_shift)
-
 static uint32_t sd_inode_get_idx(struct sheepdog_vdi *sd_vdi,
 				       uint32_t idx)
 {
@@ -425,7 +423,7 @@ retry:
 	return ret;
 }
 
-static int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
+int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
 {
@@ -475,7 +473,7 @@ recheck:
 	return ret;
 }
 
-static int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
+int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io, bool write_zeroes)
 {
@@ -543,7 +541,7 @@ recheck:
 	return ret;
 }
 
-static int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
+int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
 {
@@ -622,49 +620,5 @@ retry:
 	if (sd_io->type == SHEEP_CREATE)
 		ret = sd_update_inode(fd, sd_vdi,
 				      sd_io->req.obj.oid);
-	return ret;
-}
-
-int sheepdog_rw(const struct ublksrv_queue *q,
-		struct sheepdog_vdi *sd_vdi,
-		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io, int tag)
-{
-	struct sheepdog_queue_ctx *q_ctx =
-		(struct sheepdog_queue_ctx *)q->private_data;
-	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
-	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t total = iod->nr_sectors << 9;
-	uint64_t start = offset % object_size;
-	int ublk_op = ublksrv_get_op(iod);
-	size_t len = object_size - start;
-	int ret = 0;
-
-	if (total > len) {
-		ublk_err("%s: op %u access beyond object size off %llu total %llu\n",
-			 __func__, ublk_op, offset, total);
-		ret = -EIO;
-	}
-	memset(&sd_io->req, 0, sizeof(sd_io->req));
-	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
-	sd_io->req.id = tag;
-	switch (ublk_op) {
-	case UBLK_IO_OP_WRITE:
-		ret = sd_exec_write(q_ctx->fd, sd_vdi, iod, sd_io);
-		break;
-	case UBLK_IO_OP_READ:
-		ret = sd_exec_read(q_ctx->fd, sd_vdi, iod, sd_io);
-		break;
-	case UBLK_IO_OP_DISCARD:
-	case UBLK_IO_OP_WRITE_ZEROES:
-		ret = sd_exec_discard(q_ctx->fd, sd_vdi, iod, sd_io,
-			ublk_op == UBLK_IO_OP_DISCARD ? false : true);
-		break;
-	default:
-		ublk_err("%s: tag %u op %u not supported\n",
-			 __func__, tag, ublk_op);
-		ret = -EOPNOTSUPP;
-		break;
-	}
 	return ret;
 }

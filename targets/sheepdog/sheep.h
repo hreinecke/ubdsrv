@@ -32,15 +32,22 @@ struct sd_io_context {
 	void *addr;
 };
 
+#define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode.block_size_shift)
+
 int sd_connect(const char *cluster_host, const char *cluster_port);
 int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 		const char *tag, uint32_t *vid, bool snapshot);
 int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);
-  int sd_read_inode(int fd, struct sheepdog_vdi *vdi, bool snapshot);
-int sheepdog_rw(const struct ublksrv_queue *q,
-		struct sheepdog_vdi *sd_vdi,
-		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io, int tag);
+int sd_read_inode(int fd, struct sheepdog_vdi *vdi, bool snapshot);
+int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
+		 const struct ublksrv_io_desc *iod,
+		 struct sd_io_context *sd_io);
+int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
+		    const struct ublksrv_io_desc *iod,
+		    struct sd_io_context *sd_io, bool write_zeroes);
+int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
+		  const struct ublksrv_io_desc *iod,
+		  struct sd_io_context *sd_io);
 
 #ifdef __cplusplus
 }
