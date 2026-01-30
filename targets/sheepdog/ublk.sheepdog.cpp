@@ -116,7 +116,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		{ "lbs",	required_argument, NULL, 'b'},
 		{ NULL }
 	};
-	int opt, lbs = 0, ret;
+	int opt, lbs = 9, ret;
 	char *vdi_name = NULL;
 	const char *cluster_host = "127.0.0.1";
 	const char *cluster_port = "7000";
@@ -195,7 +195,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	p.basic.dev_sectors = dev->vdi.inode.vdi_size >> 9;
 	p.discard.discard_granularity = p.basic.chunk_sectors;
 	p.discard.max_discard_sectors = p.basic.chunk_sectors;
-	if (lbs) {
+	if (lbs > 9) {
 		if (lbs > p.basic.physical_bs_shift) {
 			ublk_err( "%s: logical block size %d too large\n",
 				  __func__, lbs);
