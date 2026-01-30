@@ -73,25 +73,25 @@ int sd_connect(const char *cluster_host, const char *cluster_port)
 		ublk_err( "%s: getaddrinfo failed: %s\n",
 			  __func__, gai_strerror(e));
 		freeaddrinfo(ai);
-		return -1;
+		return -ENETUNREACH;
 	}
 
 	for(rp = ai; rp != NULL; rp = rp->ai_next) {
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 
-		if(sock == -1)
+		if (sock < 0)
 			continue;	/* error */
 
-		if(connect(sock, rp->ai_addr, rp->ai_addrlen) != -1)
+		if (connect(sock, rp->ai_addr, rp->ai_addrlen) != -1)
 			break;		/* success */
-			
+
 		close(sock);
 	}
 
 	if (rp == NULL) {
 		ublk_err( "%s: no valid addresses found for %s:%s\n",
 			  __func__, cluster_host, cluster_port);
-		sock = -1;
+		sock = -EHOSTUNREACH;
 		goto err;
 	}
 
