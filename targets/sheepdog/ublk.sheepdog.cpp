@@ -190,6 +190,9 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	if (ret < 0)
 		return ret;
 
+	ublk_json_write_tgt_ulong(cdev, "vid", dev->vdi.vid);
+	ublk_json_write_tgt_ulong(cdev, "ctime", dev->vdi.inode.create_time);
+
 	p.basic.physical_bs_shift = dev->vdi.inode.block_size_shift;
 	p.basic.chunk_sectors = 1 << (p.basic.physical_bs_shift - 9);
 	p.basic.dev_sectors = dev->vdi.inode.vdi_size >> 9;
