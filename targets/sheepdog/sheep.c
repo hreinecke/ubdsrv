@@ -52,7 +52,27 @@ static inline bool is_data_obj_writable(struct sheepdog_vdi *sd_vdi,
 	return writable;
 }
 
-int sd_connect(const char *cluster_host, const char *cluster_port)
+static int set_sock_timeout(int fd, unsigned int snd_tmo, unsigned int rcv_tmo)
+{
+	struct timeval timeout = {
+		.tv_sec = snd_tmo,
+		.tv_usec = 0,
+	};
+	int ret;
+
+	ret = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+			 (char *)&timeout, sizeof(timeout));
+	if (ret < 0)
+		return ret;
+
+	timeout.tv_sec = rcv_tmo;
+
+	return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+			  (char *)&timeout, sizeof(timeout));
+}
+
+int sd_connect(const char *cluster_host, const char *cluster_port,
+	       unsigned int send_tmo, unsigned int recv_tmo)
 {
 	int sock;
 	struct addrinfo hints;
@@ -77,11 +97,22 @@ int sd_connect(const char *cluster_host, const char *cluster_port)
 	}
 
 	for(rp = ai; rp != NULL; rp = rp->ai_next) {
+		int ret;
+
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 
 		if (sock < 0)
 			continue;	/* error */
 
+		ret = set_sock_timeout(sock, send_tmo, recv_tmo);
+		if (ret < 0) {
+			ublk_err( "%s: failed to set socket timeout",
+				  __func__);
+			close(sock);
+			ret = -errno;
+			rp = NULL;
+			break;
+		}
 		if (connect(sock, rp->ai_addr, rp->ai_addrlen) != -1)
 			break;		/* success */
 

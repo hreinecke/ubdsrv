@@ -7,6 +7,9 @@
 extern "C" {
 #endif
 
+#define SD_SEND_TMO 5
+#define SD_RECV_TMO 60
+
 struct sheepdog_vdi {
 	char vdi_name[256];
 	uint32_t vid;
@@ -34,7 +37,8 @@ struct sd_io_context {
 
 #define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode.block_size_shift)
 
-int sd_connect(const char *cluster_host, const char *cluster_port);
+ int sd_connect(const char *cluster_host, const char *cluster_port,
+		unsigned int send_tmo, unsigned int recv_tmo);
 int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 		const char *tag, uint32_t *vid, bool lock);
 int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);

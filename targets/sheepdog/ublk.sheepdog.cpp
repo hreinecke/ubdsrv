@@ -17,6 +17,8 @@ struct sheepdog_dev {
 	char cluster_port[16];
 	char vdi_name[256];
 	struct sheepdog_vdi vdi;
+	unsigned long send_timeout;
+	unsigned long recv_timeout;
 	bool unlock;
 };
 
@@ -62,7 +64,24 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 		return ret;
 	}
 
-	fd = sd_connect(dev->cluster_host, dev->cluster_port);
+	ret = ublk_json_read_target_ulong_info(cdev, "send_timeout",
+					       &dev->send_timeout);
+	if (ret) {
+		ublk_err( "%s: read send timeout failed, error %d\n",
+			  __func__, ret);
+		return ret;
+	}
+
+	ret = ublk_json_read_target_ulong_info(cdev, "recv_timeout",
+					       &dev->recv_timeout);
+	if (ret) {
+		ublk_err( "%s: read recv timeout failed, error %d\n",
+			  __func__, ret);
+		return ret;
+	}
+
+	fd = sd_connect(dev->cluster_host, dev->cluster_port,
+			dev->send_timeout, dev->recv_timeout);
 	if (fd < 0) {
 		ublk_err( "%s: cannot connect to sheepdog cluster\n",
 			  __func__);
@@ -133,11 +152,14 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		{ "host",	required_argument, NULL, 'h'},
 		{ "port",	required_argument, NULL, 'p'},
 		{ "vdi_name",	required_argument, NULL, 'v' },
+		{ "send_tmo",	required_argument, NULL, 's'},
+		{ "read_tmo",	required_argument, NULL, 'r'},
 		{ "lbs",	required_argument, NULL, 'b'},
 		{ "unlock",	no_argument, &unlock, 'u'},
 		{ NULL }
 	};
 	int opt, lbs = 9, ret;
+	unsigned long send_tmo = SD_SEND_TMO, recv_tmo = SD_RECV_TMO;
 	char *vdi_name = NULL;
 	const char *cluster_host = "127.0.0.1";
 	const char *cluster_port = "7000";
@@ -169,7 +191,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 
 	strcpy(tgt_json.name, "sheepdog");
 
-	while ((opt = getopt_long(argc, argv, "h:p:v:b:",
+	while ((opt = getopt_long(argc, argv, "h:p:v:b:s:r:",
 				  sheepdog_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'v':
@@ -189,6 +211,22 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		case 'p':
 			cluster_port = optarg;
 			break;
+		case 's':
+			errno = 0;
+			send_tmo = strtoul(optarg, NULL, 10);
+			if (send_tmo == ULONG_MAX && errno)
+				return -EINVAL;
+			if (send_tmo < 5)
+				return -EINVAL;
+			break;
+		case 'r':
+			errno = 0;
+			recv_tmo = strtoul(optarg, NULL, 10);
+			if (recv_tmo == ULONG_MAX && errno)
+				return -EINVAL;
+			if (recv_tmo < send_tmo)
+				return -EINVAL;
+			break;
 		}
 	}
 
@@ -202,6 +240,8 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	ublk_json_write_tgt_str(cdev, "sheepdog_port", cluster_port);
 	ublk_json_write_tgt_str(cdev, "vdi_name", vdi_name);
 	ublk_json_write_tgt_ulong(cdev, "logical_block_shift", lbs);
+	ublk_json_write_tgt_ulong(cdev, "send_timeout", send_tmo);
+	ublk_json_write_tgt_ulong(cdev, "recv_timeout", recv_tmo);
 
 	ub_dev->tgt.tgt_data = (struct sheepdog_dev *)calloc(1, sizeof(*dev));
 	dev = (struct sheepdog_dev *)ub_dev->tgt.tgt_data;
@@ -253,7 +293,8 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 	if (!q_ctx)
 		return -ENOMEM;
 
-	fd = sd_connect(dev->cluster_host, dev->cluster_port);
+	fd = sd_connect(dev->cluster_host, dev->cluster_port,
+			dev->send_timeout, dev->recv_timeout);
 	if (fd < 0) {
 		ublk_err("%s: failed to connect to sheepdog\n",
 			 __func__);
