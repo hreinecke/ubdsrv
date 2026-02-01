@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * sheep.c - Interface functions for sheepdog
+ *
+ * Copyright (c) 2026 Hannes Reinecke, SUSE
+ */
 #include <config.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>

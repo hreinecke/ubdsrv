@@ -1,4 +1,9 @@
-// SPDX-License-Identifier: MIT or GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * ublk.sheepdog.cpp - UBLK device server for sheepdog
+ *
+ * Copyright (c) 2026 Hannes Reinecke, SUSE
+ */
 
 #include <config.h>
 

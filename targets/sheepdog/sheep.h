@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
-
+/*
+ * sheep.h - Definitions for sheepdog device server
+ *
+ * Copyright (c) 2026 Hannes Reinecke, SUSE
+ */
 #ifndef __SHEEP_H__
 #define __SHEEP_H__
 
