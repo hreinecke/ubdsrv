@@ -300,7 +300,7 @@ retry:
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.offset = offset;
 	sd_io->addr = buf;
-	ublk_err ( "%s: opcode %u oid %llx len %llu\n",
+	ublk_err ( "%s: opcode %u oid %lx len %llu\n",
 		   __func__, sd_io->req.opcode, sd_io->req.obj.oid,
 		   sd_io->req.data_length);
 	ret = sd_submit(fd, sd_io);
@@ -311,7 +311,7 @@ retry:
 			*need_reload = 2;
 			ret = 0;
 		} else if (sd_io->rsp.result == SD_RES_READONLY) {
-			ublk_err("%s: oid %llx is read-only\n",
+			ublk_err("%s: oid %lx is read-only\n",
 				 __func__, sd_io->req.obj.oid);
 			*need_reload = 1;
 			ret = 0;
@@ -323,12 +323,12 @@ retry:
 				 * VDI became snapshot but inode
 				 * object has not been created (yet).
 				 */
-				ublk_err("%s: oid %llx not found, retry\n",
+				ublk_err("%s: oid %lx not found, retry\n",
 					 __func__, sd_io->req.obj.oid);
 				memset(sd_io, 0, sizeof(*sd_io));
 				goto retry;
 			}
-			ublk_err( "%s: error reading oid %llx, rsp %u, error %d\n",
+			ublk_err( "%s: error reading oid %lx, rsp %u, error %d\n",
 				  __func__, sd_io->req.obj.oid,
 				  sd_io->rsp.result, ret);
 		}
@@ -445,7 +445,7 @@ retry:
 	else if (sd_io->rsp.result == SD_RES_READONLY)
 		need_reload = 1;
 	else if (ret < 0) {
-		ublk_err( "%s: update inode oid %llx failed, rsp %d err %d\n",
+		ublk_err( "%s: update inode oid %lx failed, rsp %d err %d\n",
 			  __func__, sd_io->req.obj.oid,
 			  sd_io->rsp.result, ret);
 	}
@@ -490,12 +490,12 @@ recheck:
 		goto recheck;
 	}
 
-	ublk_err("%s: read oid %llx from vid %x\n",
+	ublk_err("%s: read oid %lx from vid %x\n",
 		 __func__, oid, vid);
 	ret = sd_read_object(fd, sd_io, oid, (void *)iod->addr,
 			     start, total, &need_reload);
 	if (ret < 0)
-		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
 			 sd_io->req.opcode, sd_io->rsp.result);
 	return ret;
@@ -545,7 +545,7 @@ recheck:
 	sd_io->req.data_length = sizeof(new_vid);
 	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
-	ublk_err("%s: discard oid %llx of vid %x\n",
+	ublk_err("%s: discard oid %lx of vid %x\n",
 			 __func__, sd_io->req.obj.oid, orig_vid);
 	ret = sd_submit(fd, sd_io);
 	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
@@ -563,7 +563,7 @@ recheck:
 			goto recheck;
 	}
 	if (ret < 0)
-		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
 			 sd_io->req.opcode, sd_io->rsp.result);
 	return ret;
@@ -599,7 +599,7 @@ retry:
 		sd_vdi->inode.data_vdi_id[idx] = vid;
 
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
-		ublk_err("%s: create new oid %llx from vid %x\n",
+		ublk_err("%s: create new oid %lx from vid %x\n",
 			 __func__, oid, vid);
 	} else if (!is_data_obj_writable(sd_vdi, idx)) {
 		/* use copy-on-write */
@@ -611,12 +611,12 @@ retry:
 
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_COW;
-		ublk_err("%s: create new obj %llx cow %llx from vid %x\n",
+		ublk_err("%s: create new obj %lx cow %lx from vid %x\n",
 			 __func__, oid, cow_oid, vid);
 	} else {
 		oid = vid_to_data_oid(vid, idx);
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
-		ublk_err("%s: write oid %llx\n",
+		ublk_err("%s: write oid %lx\n",
 			 __func__, oid);
 	}
 	pthread_mutex_unlock(&sd_vdi->inode_lock);
@@ -636,7 +636,7 @@ retry:
 			goto retry;
 	}
 	if (ret < 0) {
-		ublk_err("%s: tag %u oid %llx opcode %x rsp %d\n",
+		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
 			 sd_io->req.opcode, sd_io->rsp.result);
 		return ret;
