@@ -17,6 +17,7 @@ struct sheepdog_dev {
 	char cluster_port[16];
 	char vdi_name[256];
 	struct sheepdog_vdi vdi;
+	bool unlock;
 };
 
 static inline struct sd_io_context *
@@ -68,11 +69,28 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 		return fd;
 	}
 
-	ret = sd_vdi_lookup(fd, dev->vdi_name, 0, NULL, &dev->vdi.vid, false);
+	ret = sd_vdi_lookup(fd, dev->vdi_name, 0, NULL,
+			    &dev->vdi.vid, dev->unlock ? false : true);
 	if (ret < 0) {
 		dev->vdi.vid = 0;
 		close(fd);
 		return ret;
+	}
+	if (dev->unlock) {
+		ret = sd_vdi_release(fd, &dev->vdi);
+		if (ret < 0) {
+			ublk_err( "%s: failed to release VID %x\n",
+				  __func__, dev->vdi.vid);
+			close(fd);
+			return ret;
+		}
+		ret = sd_vdi_lookup(fd, dev->vdi_name, 0, NULL,
+				    &dev->vdi.vid, true);
+		if (ret < 0) {
+			dev->vdi.vid = 0;
+			close(fd);
+			return ret;
+		}
 	}
 	ret = sd_read_inode(fd, &dev->vdi, false);
 	close(fd);
@@ -99,6 +117,7 @@ static int sheepdog_recover_tgt(struct ublksrv_dev *ub_dev, int type)
 	ub_dev->tgt.tgt_data =
 		(struct sheepdog_dev *)calloc(1, sizeof(struct sheepdog_dev));
 	dev = (struct sheepdog_dev *)ub_dev->tgt.tgt_data;
+	dev->unlock = true;
 	pthread_mutex_init(&dev->vdi.inode_lock, NULL);
 	return sheepdog_setup_tgt(ub_dev, type);
 }
@@ -109,11 +128,13 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	const struct ublksrv_ctrl_dev *cdev = ublksrv_get_ctrl_dev(ub_dev);
 	const struct ublksrv_ctrl_dev_info *info =
 		ublksrv_ctrl_get_dev_info(cdev);
+	int unlock = 0;
 	static const struct option sheepdog_longopts[] = {
 		{ "host",	required_argument, NULL, 'h'},
 		{ "port",	required_argument, NULL, 'p'},
 		{ "vdi_name",	required_argument, NULL, 'v' },
 		{ "lbs",	required_argument, NULL, 'b'},
+		{ "unlock",	no_argument, &unlock, 'u'},
 		{ NULL }
 	};
 	int opt, lbs = 9, ret;
@@ -185,6 +206,10 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	ub_dev->tgt.tgt_data = (struct sheepdog_dev *)calloc(1, sizeof(*dev));
 	dev = (struct sheepdog_dev *)ub_dev->tgt.tgt_data;
 	pthread_mutex_init(&dev->vdi.inode_lock, NULL);
+	if (unlock)
+		dev->unlock = true;
+	else
+		dev->unlock = false;
 
 	ret = sheepdog_setup_tgt(ub_dev, type);
 	if (ret < 0)
@@ -333,6 +358,7 @@ static void sheepdog_cmd_usage()
 {
 	printf("\t-v|--vdi_name vdi_name\n");
 	printf("\t[-h|--host host] [-p|--port port]\n");
+	printf("\t[-u|--unlock]\n");
 }
 
 static const struct ublksrv_tgt_type  sheepdog_tgt_type = {

@@ -36,7 +36,7 @@ struct sd_io_context {
 
 int sd_connect(const char *cluster_host, const char *cluster_port);
 int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
-		const char *tag, uint32_t *vid, bool snapshot);
+		const char *tag, uint32_t *vid, bool lock);
 int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);
 int sd_read_inode(int fd, struct sheepdog_vdi *vdi, bool snapshot);
 int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,

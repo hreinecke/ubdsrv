@@ -198,21 +198,22 @@ static int sd_submit(int fd, struct sd_io_context *sd_io)
 /* --- Sheepdog Protocol Handshake --- */
 
 int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
-		const char *tag, uint32_t *vid, bool snapshot)
+		const char *tag, uint32_t *vid, bool lock)
 {
 	struct sd_io_context sd_io = { 0 };
 	size_t buflen = SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN;
 	char name_buf[SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN] = {0};
 	int ret;
 
-	if (snapshot)
-		sd_io.req.opcode = SD_OP_GET_VDI_INFO;
-	else
+	if (lock) {
 		sd_io.req.opcode = SD_OP_LOCK_VDI;
+		sd_io.req.vdi.type = LOCK_TYPE_SHARED;
+	} else {
+		sd_io.req.opcode = SD_OP_GET_VDI_INFO;
+	}
 	sd_io.req.proto_ver = SD_PROTO_VER;
 	sd_io.req.data_length = buflen;
 	sd_io.req.flags = SD_FLAG_CMD_WRITE;
-	sd_io.req.vdi.type = LOCK_TYPE_SHARED;
 	sd_io.req.vdi.snapid = snapid;
 	memset(name_buf, 0, buflen);
 	strncpy(name_buf, vdi_name, SD_MAX_VDI_LEN - 1);
@@ -341,7 +342,7 @@ int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
 	pthread_mutex_lock(&sd_vdi->inode_lock);
 	if (snapshot) {
 		ret = sd_vdi_lookup(fd, sd_vdi->inode.name,
-				    CURRENT_VDI_ID, NULL, &vid, false);
+				    CURRENT_VDI_ID, NULL, &vid, true);
 		if (ret == 0) {
 			ret = sd_read_object(fd, sd_io, vid_to_vdi_oid(vid),
 					     (char *)inode, 0,
@@ -362,7 +363,7 @@ int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
 			 */
 			ret = sd_vdi_lookup(fd, inode->name,
 					    CURRENT_VDI_ID,
-					    NULL, &vid, false);
+					    NULL, &vid, true);
 			if (ret == 0)
 				ret = sd_read_object(fd, sd_io,
 						     vid_to_vdi_oid(vid),
