@@ -396,7 +396,7 @@ static void sheepdog_deinit_tgt(const struct ublksrv_dev *ub_dev)
 
 	if (dev) {
 		pthread_mutex_destroy(&dev->vdi.inode_lock);
-//		free(dev);
+		free(dev);
 	}
 }
 
