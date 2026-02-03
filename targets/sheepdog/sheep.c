@@ -467,6 +467,26 @@ retry:
 	return ret;
 }
 
+static int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
+{
+	uint32_t vid;
+	int ret;
+
+recheck:
+	vid = sd_inode_get_idx(sd_vdi, idx);
+	/* Return if object is present */
+	if (vid)
+		return vid;
+
+	if (!sd_refresh_required(fd, sd_vdi))
+		return 0;
+
+	ret = sd_read_inode(fd, sd_vdi, false);
+	if (ret < 0)
+		return ret;
+	goto recheck;
+}
+
 int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
@@ -476,25 +496,20 @@ int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
-	uint32_t vid = sd_inode_get_idx(sd_vdi, idx);
+	uint32_t vid;
 	uint64_t oid = vid_to_data_oid(vid, idx);
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int ret = 0, need_reload;
 
-recheck:
-	/* No object present, return NULL */
-	if (!vid) {
-		if (!sd_refresh_required(fd, sd_vdi)) {
-			memset((void *)iod->addr, 0, total);
-			return 0;
-		}
-		ret = sd_read_inode(fd, sd_vdi, false);
-		if (ret)
-			return ret;
-		vid = sd_inode_get_idx(sd_vdi, idx);
-		goto recheck;
+	ret = sd_resolve_vid(fd, sd_vdi, idx);
+	if (ret < 0)
+		return ret;
+	if (!ret) {
+		memset((void *)iod->addr, 0, total);
+		return 0;
 	}
+	vid = ret;
 
 	ublk_err("%s: read oid %lx from vid %x\n",
 		 __func__, oid, vid);
@@ -521,20 +536,15 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 	size_t len = object_size - start;
 	int need_reload = 0, ret = 0;
 
-recheck:
-	orig_vid = sd_inode_get_idx(sd_vdi, idx);
-	/* No object present, return NULL */
-	if (!orig_vid) {
-		if (!sd_refresh_required(fd, sd_vdi)) {
-			if (write_zeroes)
-				memset((void *)iod->addr, 0, total);
-			return 0;
-		}
-		ret = sd_read_inode(fd, sd_vdi, false);
-		if (ret < 0)
-			return ret;
-		goto recheck;
+	ret = sd_resolve_vid(fd, sd_vdi, idx);
+	if (ret < 0)
+		return ret;
+	if (!ret && write_zeroes) {
+		memset((void *)iod->addr, 0, total);
+		return 0;
 	}
+	orig_vid = ret;
+retry:
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_WRITE_OBJ;
 	sd_io->req.flags |= SD_FLAG_CMD_WRITE;
@@ -565,8 +575,11 @@ recheck:
 	if (need_reload) {
 		need_reload = 0;
 		ret = sd_read_inode(fd, sd_vdi, need_reload == 1);
-		if (!ret)
-			goto recheck;
+		if (!ret) {
+			orig_vid = sd_inode_get_idx(sd_vdi, idx);
+			if (orig_vid)
+				goto retry;
+		}
 	}
 	if (ret < 0)
 		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
