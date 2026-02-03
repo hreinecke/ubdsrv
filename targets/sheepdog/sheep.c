@@ -139,6 +139,28 @@ err:
 	return sock;
 }
 
+static int sd_result_to_errno(struct sd_io_context *sd_io)
+{
+	switch (sd_io->rsp.result) {
+	case SD_RES_SUCCESS:
+		return 0;
+	case SD_RES_NO_OBJ:
+	case SD_RES_NO_VDI:
+	case SD_RES_NO_BASE_VDI:
+		return -ENOENT;
+	case SD_RES_VDI_EXIST:
+		return -EEXIST;
+	case SD_RES_INVALID_PARMS:
+		return -EINVAL;
+		break;
+	case SD_RES_VDI_LOCKED:
+		return -EILSEQ;
+	default:
+		break;
+	}
+	return -EIO;
+}
+
 static int sd_submit(int fd, struct sd_io_context *sd_io)
 {
 	struct iovec iov[2];
@@ -207,29 +229,7 @@ static int sd_submit(int fd, struct sd_io_context *sd_io)
 		}
 	}
 
-	switch (sd_io->rsp.result) {
-	case SD_RES_SUCCESS:
-		ret = 0;
-		break;
-	case SD_RES_NO_OBJ:
-	case SD_RES_NO_VDI:
-	case SD_RES_NO_BASE_VDI:
-		ret = -ENOENT;
-		break;
-	case SD_RES_VDI_EXIST:
-		ret = -EEXIST;
-		break;
-	case SD_RES_INVALID_PARMS:
-		ret = -EINVAL;
-		break;
-	case SD_RES_VDI_LOCKED:
-		ret = -EILSEQ;
-		break;
-	default:
-		ret = -EIO;
-		break;
-	}
-	return ret;
+	return sd_result_to_errno(sd_io);
 }
 
 /* --- Sheepdog Protocol Handshake --- */
