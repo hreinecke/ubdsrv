@@ -588,6 +588,47 @@ retry:
 	return ret;
 }
 
+static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
+			  struct sd_io_context *sd_io, unsigned int idx)
+{
+	uint32_t vid;
+
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	vid = sd_vdi->inode.data_vdi_id[idx];
+	if (!vid) {
+		/* Create new object */
+		vid = sd_vdi->vid;
+		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
+		sd_io->req.obj.cow_oid = 0;
+		/* Update inode */
+		sd_vdi->inode.data_vdi_id[idx] = vid;
+
+		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
+		ublk_err("%s: create new oid %lx from vid %x\n",
+			 __func__, sd_io->req.obj.oid, vid);
+	} else if (!is_data_obj_writable(sd_vdi, idx)) {
+		/* use copy-on-write */
+		sd_io->req.obj.cow_oid = vid_to_data_oid(vid, idx);
+		vid = sd_vdi->vid;
+		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
+		/* Update inode */
+		sd_vdi->inode.data_vdi_id[idx] = vid;
+
+		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
+		sd_io->req.flags |= SD_FLAG_CMD_COW;
+		ublk_err("%s: create new obj %lx cow %lx from vid %x\n",
+			 __func__, sd_io->req.obj.oid,
+			 sd_io->req.obj.cow_oid, vid);
+	} else {
+		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
+		sd_io->req.obj.cow_oid = 0;
+		sd_io->req.opcode = SD_OP_WRITE_OBJ;
+		ublk_err("%s: write oid %lx\n",
+			 __func__, sd_io->req.obj.oid);
+	}
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
+
+}
 int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io)
@@ -597,48 +638,19 @@ int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
 	uint32_t idx = offset / object_size;
-	uint32_t vid;
 	uint64_t oid = 0, cow_oid = 0;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int ret;
 
+retry:
+	memset(sd_io, 0, sizeof(*sd_io));
+	sd_prep_write(sd_vdi, sd_io, idx);
+
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 	sd_io->addr = (void *)iod->addr;
-retry:
-	pthread_mutex_lock(&sd_vdi->inode_lock);
-	vid = sd_vdi->inode.data_vdi_id[idx];
-	if (!vid) {
-		/* Create new object */
-		vid = sd_vdi->vid;
-		oid = vid_to_data_oid(vid, idx);
-		/* Update inode */
-		sd_vdi->inode.data_vdi_id[idx] = vid;
-
-		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
-		ublk_err("%s: create new oid %lx from vid %x\n",
-			 __func__, oid, vid);
-	} else if (!is_data_obj_writable(sd_vdi, idx)) {
-		/* use copy-on-write */
-		cow_oid = vid_to_data_oid(vid, idx);
-		vid = sd_vdi->vid;
-		oid = vid_to_data_oid(vid, idx);
-		/* Update inode */
-		sd_vdi->inode.data_vdi_id[idx] = vid;
-
-		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
-		sd_io->req.flags |= SD_FLAG_CMD_COW;
-		ublk_err("%s: create new obj %lx cow %lx from vid %x\n",
-			 __func__, oid, cow_oid, vid);
-	} else {
-		oid = vid_to_data_oid(vid, idx);
-		sd_io->req.opcode = SD_OP_WRITE_OBJ;
-		ublk_err("%s: write oid %lx\n",
-			 __func__, oid);
-	}
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
 
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.cow_oid = cow_oid;
