@@ -347,7 +347,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	int ret = 0;
 
 	if (total > len) {
-		ublk_err("%s: op %u access beyond object size off %llu total %llu\n",
+		ublk_err("%s: op %u access beyond object size off %lu total %u\n",
 			 __func__, ublk_op, offset, total);
 		ret = -EIO;
 	}
@@ -373,7 +373,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		break;
 	}
 
-	ublk_dbg(UBLK_DBG_IO, "%s: tag %d opcode %x len %ld ret %d\n", __func__,
+	ublk_dbg(UBLK_DBG_IO, "%s: tag %d opcode %x len %u ret %d\n", __func__,
 		 data->tag, sd_io->req.opcode, total, ret);
 	return ret < 0 ? ret : total;
 }
