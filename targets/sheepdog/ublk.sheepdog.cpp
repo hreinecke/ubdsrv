@@ -341,9 +341,12 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	uint32_t object_size = SD_OBJECT_SIZE(&dev->vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
+	uint32_t idx = offset / object_size;
 	uint64_t start = offset % object_size;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
+	unsigned int need_reload = 0;
+	uint64_t oid;
 	int ret = 0;
 
 	if (total > len) {
@@ -356,15 +359,57 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	sd_io->req.id = data->tag;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io);
+	retry_write:
+		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io,
+				    &need_reload);
+		if (need_reload) {
+			ret = sd_read_inode(q_ctx->fd, &dev->vdi,
+					    need_reload == 1);
+			if (!ret)
+				goto retry_write;
+		}
+		if (!ret && sd_io->req.opcode == SD_OP_CREATE_AND_WRITE_OBJ)
+			ret = sd_update_inode(q_ctx->fd, &dev->vdi,
+					      sd_io->req.obj.oid);
 		break;
 	case UBLK_IO_OP_READ:
-		ret = sd_exec_read(q_ctx->fd, &dev->vdi, iod, sd_io);
+		ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
+		if (ret < 0)
+			break;
+		if (!ret) {
+			memset((void *)iod->addr, 0, total);
+			break;
+		}
+		oid = vid_to_data_oid(ret, idx);
+		ret = sd_read_object(q_ctx->fd, sd_io, oid, (void *)iod->addr,
+				     start, total, NULL);
+		if (ret < 0)
+			ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
+				 __func__, sd_io->req.id, sd_io->req.obj.oid,
+				 sd_io->req.opcode, sd_io->rsp.result);
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:
-		ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod, sd_io,
-			ublk_op == UBLK_IO_OP_DISCARD ? false : true);
+		ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
+		if (ret < 0)
+			break;
+		if (!ret) {
+			if (ublk_op == UBLK_IO_OP_WRITE_ZEROES)
+				memset((void *)iod->addr, 0, total);
+			break;
+		}
+	retry_discard:
+		oid = vid_to_vdi_oid(ret);
+		ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod, sd_io, oid,
+				      &need_reload);
+		if (need_reload) {
+			ret = sd_clear_vid(q_ctx->fd, &dev->vdi, idx,
+					    need_reload == 1);
+			if (ret > 0) {
+				need_reload = 0;
+				goto retry_discard;
+			}
+		}
 		break;
 	default:
 		ublk_err("%s: tag %u op %u not supported\n",
