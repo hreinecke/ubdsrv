@@ -367,19 +367,15 @@ int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
 	if (!inode)
 		return -ENOMEM;
 
-	pthread_mutex_lock(&sd_vdi->inode_lock);
+retry:
 	if (snapshot) {
 		ret = sd_vdi_lookup(fd, sd_vdi->inode.name,
 				    CURRENT_VDI_ID, NULL, &vid, true);
-		if (ret == 0) {
+		if (ret == 0)
 			ret = sd_read_object(fd, &sd_io, vid_to_vdi_oid(vid),
 					     (char *)inode, 0,
 					     SD_INODE_HEADER_SIZE,
 					     &need_reload);
-			if (ret == 0)
-				memcpy(&sd_vdi->inode, inode,
-				       SD_INODE_HEADER_SIZE);
-		}
 	} else {
 		ret = sd_read_object(fd, &sd_io, vid_to_vdi_oid(vid),
 				     (char *)inode, 0, SD_INODE_SIZE,
@@ -387,26 +383,20 @@ int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
 		if (ret == 0 && inode->snap_ctime) {
 			/*
 			 * Internal sheepdog race, resolve VID for
-			 * read-onlye snapshot.
+			 * read-only snapshot.
 			 */
-			ret = sd_vdi_lookup(fd, inode->name,
-					    CURRENT_VDI_ID,
-					    NULL, &vid, true);
-			if (ret == 0)
-				ret = sd_read_object(fd, &sd_io,
-						     vid_to_vdi_oid(vid),
-						     (char *)inode, 0,
-						     SD_INODE_SIZE,
-						     &need_reload);
+			snapshot = true;
+			goto retry;
 		}
-		if (ret == 0)
-			memcpy(&sd_vdi->inode, inode, SD_INODE_SIZE);
 	}
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
-	free(inode);
-	if (ret < 0)
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	if (ret == 0)
+		memcpy(&sd_vdi->inode, inode, SD_INODE_SIZE);
+	else
 		ublk_err("%s: failed to update inode, error %d\n",
 			 __func__, ret);
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	free(inode);
 	return ret;
 }
 
