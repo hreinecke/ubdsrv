@@ -452,9 +452,6 @@ recheck:
 	if (vid)
 		return vid;
 
-	if (!sd_refresh_required(fd, sd_vdi))
-		return 0;
-
 	ret = sd_read_inode(fd, sd_vdi, false);
 	if (ret < 0)
 		return ret;
