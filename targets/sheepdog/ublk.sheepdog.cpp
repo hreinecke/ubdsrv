@@ -116,7 +116,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 			return ret;
 		}
 	}
-	ret = sd_read_inode(fd, &dev->vdi, false);
+	ret = sd_read_inode(fd, &dev->vdi);
 	close(fd);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read params for VID %x\n",
@@ -345,7 +345,6 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	uint64_t start = offset % object_size;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
-	unsigned int need_reload = 0;
 	uint64_t oid;
 	int ret = 0;
 
@@ -360,11 +359,9 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
 	retry_write:
-		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io,
-				    &need_reload);
-		if (need_reload) {
-			ret = sd_read_inode(q_ctx->fd, &dev->vdi,
-					    need_reload == 1);
+		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io);
+		if (sd_inode_needs_reload(&dev->vdi)) {
+			ret = sd_read_inode(q_ctx->fd, &dev->vdi);
 			if (!ret)
 				goto retry_write;
 		}
@@ -382,7 +379,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		}
 		oid = vid_to_data_oid(ret, idx);
 		ret = sd_read_object(q_ctx->fd, sd_io, oid, (void *)iod->addr,
-				     start, total, NULL);
+				     start, total);
 		if (ret < 0)
 			ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 				 __func__, sd_io->req.id, sd_io->req.obj.oid,
@@ -400,15 +397,11 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		}
 	retry_discard:
 		oid = vid_to_vdi_oid(ret);
-		ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod, sd_io, oid,
-				      &need_reload);
-		if (need_reload) {
-			ret = sd_clear_vid(q_ctx->fd, &dev->vdi, idx,
-					    need_reload == 1);
-			if (ret > 0) {
-				need_reload = 0;
+		ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod, sd_io, oid);
+		if (sd_inode_needs_reload(&dev->vdi)) {
+			ret = sd_clear_vid(q_ctx->fd, &dev->vdi, idx);
+			if (ret > 0)
 				goto retry_discard;
-			}
 		}
 		break;
 	default:

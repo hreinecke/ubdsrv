@@ -47,6 +47,41 @@ static uint32_t sd_inode_get_idx(struct sheepdog_vdi *sd_vdi,
 	return vid;
 }
 
+static void sd_inode_invalidate(struct sheepdog_vdi *sd_vdi,
+				bool invalidated)
+{
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	sd_vdi->invalidated = invalidated;
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
+}
+
+static void sd_inode_is_snapshot(struct sheepdog_vdi *sd_vdi,
+				 bool snapshot)
+{
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	sd_vdi->is_snapshot = snapshot;
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
+}
+
+static void sd_inode_evaluate_result(struct sheepdog_vdi *sd_vdi,
+				     struct sd_io_context *sd_io)
+{
+	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
+		sd_inode_invalidate(sd_vdi, true);
+	else if (sd_io->rsp.result == SD_RES_READONLY)
+		sd_inode_is_snapshot(sd_vdi, true);
+}
+
+bool sd_inode_needs_reload(struct sheepdog_vdi *sd_vdi)
+{
+	bool needs_reload;
+
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	needs_reload = sd_vdi->invalidated || sd_vdi->is_snapshot;
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	return needs_reload;
+}
+
 /* locking is done by the caller */
 static inline bool is_data_obj_writable(struct sheepdog_vdi *sd_vdi,
 					uint32_t idx)
@@ -293,8 +328,7 @@ int sd_vdi_release(int fd, struct sheepdog_vdi *vdi)
 }
 
 int sd_read_object(int fd, struct sd_io_context *sd_io,
-		uint64_t oid, void *buf, size_t offset,
-		size_t len, int *need_reload)
+		uint64_t oid, void *buf, size_t offset, size_t len)
 {
 	int ret;
 
@@ -310,36 +344,20 @@ retry:
 		   __func__, sd_io->req.opcode, sd_io->req.obj.oid,
 		   sd_io->req.data_length);
 	ret = sd_submit(fd, sd_io);
-	if (ret < 0) {
-		if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED) {
-			ublk_err("%s: inode object is invalidated\n",
-				 __func__);
-			if (need_reload)
-				*need_reload = 2;
-			ret = 0;
-		} else if (sd_io->rsp.result == SD_RES_READONLY) {
-			ublk_err("%s: oid %lx is read-only\n",
-				 __func__, sd_io->req.obj.oid);
-			if (need_reload)
-				*need_reload = 1;
-			ret = 0;
-		} else {
-			if (sd_io->rsp.result == SD_RES_NO_OBJ &&
-			    oid & VDI_BIT) {
-				/*
-				 * internal sheepdog race;
-				 * VDI became snapshot but inode
-				 * object has not been created (yet).
-				 */
-				ublk_err("%s: oid %lx not found, retry\n",
-					 __func__, sd_io->req.obj.oid);
-				memset(sd_io, 0, sizeof(*sd_io));
-				goto retry;
-			}
-			ublk_err( "%s: error reading oid %lx, rsp %u, error %d\n",
-				  __func__, sd_io->req.obj.oid,
-				  sd_io->rsp.result, ret);
-		}
+	if (sd_io->rsp.result == SD_RES_NO_OBJ && (oid & VDI_BIT)) {
+		/*
+		 * internal sheepdog race;
+		 * VDI became snapshot but inode
+		 * object has not been created (yet).
+		 */
+		ublk_err("%s: oid %lx not found, retry\n",
+			 __func__, sd_io->req.obj.oid);
+		memset(sd_io, 0, sizeof(*sd_io));
+		goto retry;
+	} else if (ret < 0 || sd_io->rsp.result) {
+		ublk_err( "%s: error reading oid %lx, rsp %u, error %d\n",
+			  __func__, sd_io->req.obj.oid,
+			  sd_io->rsp.result, ret);
 	}
 	return ret < 0 ? ret : 0;
 }
@@ -349,48 +367,62 @@ static bool sd_refresh_required(int fd, struct sheepdog_vdi *sd_vdi)
 	struct sd_io_context sd_io = { 0 };
 	uint64_t oid = vid_to_vdi_oid(sd_vdi->vid);
 	char dummy[4];
-	int need_reload = 0, ret;
+	bool need_reload;
+	int ret;
 
 	/* Dummy read of the inode oid */
 	ret = sd_read_object(fd, &sd_io, oid, (char *)dummy,
-			     0, sizeof(dummy), &need_reload);
-
-	return ret < 0 ? true : need_reload > 0;
+			     0, sizeof(dummy));
+	sd_inode_evaluate_result(sd_vdi, &sd_io);
+	need_reload = sd_inode_needs_reload(sd_vdi);
+	return ret < 0 ? true : need_reload;
 }
 
-int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi, bool snapshot)
+int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi)
 {
 	struct sd_io_context sd_io = { 0 };
 	int need_reload = 0, ret;
 	struct sd_inode *inode;
 	uint32_t vid = sd_vdi->vid;
+	bool snapshot, invalidated;
 
 	inode = calloc(1, SD_INODE_SIZE);
 	if (!inode)
 		return -ENOMEM;
 
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	snapshot = sd_vdi->is_snapshot;
+	sd_vdi->is_snapshot = false;
+	invalidated = sd_vdi->invalidated;
+	sd_vdi->invalidated = false;
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
 retry:
 	if (snapshot) {
 		ret = sd_vdi_lookup(fd, sd_vdi->inode.name,
 				    CURRENT_VDI_ID, NULL, &vid, true);
-		if (ret == 0)
+		if (ret == 0) {
 			ret = sd_read_object(fd, &sd_io, vid_to_vdi_oid(vid),
 					     (char *)inode, 0,
-					     SD_INODE_HEADER_SIZE,
-					     &need_reload);
+					     SD_INODE_HEADER_SIZE);
+			invalidated =
+				(sd_io.rsp.result == SD_RES_INODE_INVALIDATED);
+			snapshot = (sd_io.rsp.result == SD_RES_READONLY);
+		}
 	} else {
 		ret = sd_read_object(fd, &sd_io, vid_to_vdi_oid(vid),
-				     (char *)inode, 0, SD_INODE_SIZE,
-				     &need_reload);
+				     (char *)inode, 0, SD_INODE_SIZE);
+		invalidated = (sd_io.rsp.result == SD_RES_INODE_INVALIDATED);
+		snapshot = (sd_io.rsp.result == SD_RES_READONLY);
 		if (ret == 0 && inode->snap_ctime) {
 			/*
 			 * Internal sheepdog race, resolve VID for
 			 * read-only snapshot.
 			 */
 			snapshot = true;
-			goto retry;
 		}
 	}
+	if (snapshot || invalidated)
+		goto retry;
 	pthread_mutex_lock(&sd_vdi->inode_lock);
 	if (ret == 0)
 		memcpy(&sd_vdi->inode, inode, SD_INODE_SIZE);
@@ -421,18 +453,14 @@ retry:
 	sd_io.req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
 	sd_io.addr = &vid;
 	ret = sd_submit(fd, &sd_io);
-	if (sd_io.rsp.result == SD_RES_INODE_INVALIDATED)
-		need_reload = 2;
-	else if (sd_io.rsp.result == SD_RES_READONLY)
-		need_reload = 1;
-	else if (ret < 0) {
+	sd_inode_evaluate_result(sd_vdi, &sd_io);
+	if (ret < 0) {
 		ublk_err( "%s: update inode oid %lx failed, rsp %d err %d\n",
 			  __func__, sd_io.req.obj.oid,
 			  sd_io.rsp.result, ret);
 	}
-	if (need_reload) {
-		need_reload = 0;
-		ret = sd_read_inode(fd, sd_vdi, false);
+	if (sd_inode_needs_reload(sd_vdi)) {
+		ret = sd_read_inode(fd, sd_vdi);
 		if (!ret) {
 			memset(&sd_io, 0, sizeof(sd_io));
 			goto retry;
@@ -446,23 +474,22 @@ int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
 	uint32_t vid;
 	int ret;
 
-recheck:
 	vid = sd_inode_get_idx(sd_vdi, idx);
 	/* Return if object is present */
 	if (vid)
 		return vid;
 
-	ret = sd_read_inode(fd, sd_vdi, false);
+	ret = sd_read_inode(fd, sd_vdi);
 	if (ret < 0)
 		return ret;
-	goto recheck;
+	return sd_inode_get_idx(sd_vdi, idx);
 }
 
-int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx, bool snapshot)
+int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx)
 {
 	int ret;
 
-	ret = sd_read_inode(fd, sd_vdi, snapshot);
+	ret = sd_read_inode(fd, sd_vdi);
 	if (ret < 0)
 		return ret;
 	return sd_inode_get_idx(sd_vdi, idx);
@@ -470,8 +497,7 @@ int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx, bool snapshot)
 
 int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io,
-		uint64_t oid, unsigned int *need_reload)
+		struct sd_io_context *sd_io, uint64_t oid)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
@@ -497,21 +523,14 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 	ublk_err("%s: discard oid %lx\n",
 			 __func__, sd_io->req.obj.oid);
 	ret = sd_submit(fd, sd_io);
-	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED) {
-		if (need_reload)
-			*need_reload = 2;
-	} else if (sd_io->rsp.result == SD_RES_READONLY) {
-		if (need_reload)
-			*need_reload = 1;
-	} else if (ret < 0) {
+	sd_inode_evaluate_result(sd_vdi, sd_io);
+	if (ret < 0) {
 		/* Something happened during I/O, re-read inode */
-		if (need_reload)
-			*need_reload = 2;
-	}
-	if (ret < 0)
+		sd_inode_invalidate(sd_vdi, true);
 		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
 			 sd_io->req.opcode, sd_io->rsp.result);
+	}
 	return ret;
 }
 
@@ -562,7 +581,7 @@ static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
 }
 int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io, unsigned int *need_reload)
+		struct sd_io_context *sd_io)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
@@ -580,13 +599,7 @@ int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
 	ret = sd_submit(fd, sd_io);
-	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED) {
-		if (need_reload)
-			*need_reload = 2;
-	} else if (sd_io->rsp.result == SD_RES_READONLY) {
-		if (need_reload)
-			*need_reload = 1;
-	}
+	sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (ret < 0) {
 		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,

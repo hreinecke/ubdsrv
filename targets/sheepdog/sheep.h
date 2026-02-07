@@ -19,6 +19,8 @@ struct sheepdog_vdi {
 	uint32_t vid;
 	pthread_mutex_t inode_lock;
 	struct sd_inode inode;
+	bool invalidated;
+	bool is_snapshot;
 };
 
 struct sheepdog_queue_ctx {
@@ -46,23 +48,22 @@ struct sd_io_context {
 int sd_vdi_lookup(int fd, const char *vdi_name, uint32_t snapid,
 		const char *tag, uint32_t *vid, bool lock);
 int sd_vdi_release(int fd, struct sheepdog_vdi *vdi);
+bool sd_inode_needs_reload(struct sheepdog_vdi *sd_vdi);
 int sd_read_object(int fd, struct sd_io_context *sd_io,
-		   uint64_t oid, void *buf, size_t offset,
-		   size_t len, int *need_reload);
-int sd_read_inode(int fd, struct sheepdog_vdi *vdi, bool snapshot);
+		   uint64_t oid, void *buf, size_t offset, size_t len);
+int sd_read_inode(int fd, struct sheepdog_vdi *vdi);
 int sd_update_inode(int fd, struct sheepdog_vdi *sd_vdi, uint64_t req_oid);
 int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx);
-int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx, bool snapshot);
+int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx);
 int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 		 const struct ublksrv_io_desc *iod,
 		 struct sd_io_context *sd_io);
 int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 		    const struct ublksrv_io_desc *iod,
-		    struct sd_io_context *sd_io, uint64_t oid,
-		    unsigned int *need_reload);
+		    struct sd_io_context *sd_io, uint64_t oid);
 int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		  const struct ublksrv_io_desc *iod,
-		  struct sd_io_context *sd_io, unsigned int *need_reload);
+		  struct sd_io_context *sd_io);
 
 #ifdef __cplusplus
 }
