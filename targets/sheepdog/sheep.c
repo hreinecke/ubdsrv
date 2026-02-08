@@ -362,22 +362,6 @@ retry:
 	return ret < 0 ? ret : 0;
 }
 
-static bool sd_refresh_required(int fd, struct sheepdog_vdi *sd_vdi)
-{
-	struct sd_io_context sd_io = { 0 };
-	uint64_t oid = vid_to_vdi_oid(sd_vdi->vid);
-	char dummy[4];
-	bool need_reload;
-	int ret;
-
-	/* Dummy read of the inode oid */
-	ret = sd_read_object(fd, &sd_io, oid, (char *)dummy,
-			     0, sizeof(dummy));
-	sd_inode_evaluate_result(sd_vdi, &sd_io);
-	need_reload = sd_inode_needs_reload(sd_vdi);
-	return ret < 0 ? true : need_reload;
-}
-
 int sd_read_inode(int fd, struct sheepdog_vdi *sd_vdi)
 {
 	struct sd_io_context sd_io = { 0 };
