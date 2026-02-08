@@ -441,7 +441,6 @@ int sd_update_inode(int fd, struct sheepdog_vdi *sd_vdi,
 	uint32_t vid, idx;
 	int need_reload = 0, ret;
 
-retry:
 	vid = sd_vdi->vid;
 	idx = data_oid_to_idx(req_oid);
 
@@ -458,13 +457,6 @@ retry:
 		ublk_err( "%s: update inode oid %lx failed, rsp %d err %d\n",
 			  __func__, sd_io.req.obj.oid,
 			  sd_io.rsp.result, ret);
-	}
-	if (sd_inode_needs_reload(sd_vdi)) {
-		ret = sd_read_inode(fd, sd_vdi);
-		if (!ret) {
-			memset(&sd_io, 0, sizeof(sd_io));
-			goto retry;
-		}
 	}
 	return ret;
 }

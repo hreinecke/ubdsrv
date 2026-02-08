@@ -358,16 +358,25 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	sd_io->req.id = data->tag;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-	retry_write:
 		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io);
 		if (sd_inode_needs_reload(&dev->vdi)) {
 			ret = sd_read_inode(q_ctx->fd, &dev->vdi);
-			if (!ret)
-				goto retry_write;
+			if (ret)
+				break;
+			ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io);
+			if (ret)
+				break;
 		}
-		if (!ret && sd_io->req.opcode == SD_OP_CREATE_AND_WRITE_OBJ)
-			ret = sd_update_inode(q_ctx->fd, &dev->vdi,
-					      sd_io->req.obj.oid);
+		if (sd_io->req.opcode != SD_OP_CREATE_AND_WRITE_OBJ)
+			break;
+		oid = sd_io->req.obj.oid;
+		ret = sd_update_inode(q_ctx->fd, &dev->vdi, oid);
+		if (sd_inode_needs_reload(&dev->vdi)) {
+			ret = sd_read_inode(q_ctx->fd, &dev->vdi);
+			if (ret)
+				break;
+			ret = sd_update_inode(q_ctx->fd, &dev->vdi, oid);
+		}
 		break;
 	case UBLK_IO_OP_READ:
 		ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
