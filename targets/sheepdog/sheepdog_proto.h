@@ -376,12 +376,6 @@ struct sd_index_header {
 #define	BTREE_INDEX        2
 #define BTREE_INDIRECT_IDX 4
 
-typedef int (*write_node_fn)(uint64_t id, void *mem, unsigned int len,
-				uint64_t offset, uint32_t flags, int copies,
-				int copy_policy, bool create, bool direct);
-typedef int (*read_node_fn)(uint64_t id, void **mem, unsigned int len,
-				uint64_t offset);
-
 struct sheepdog_vdi_attr {
 	char name[SD_MAX_VDI_LEN];
 	char tag[SD_MAX_VDI_TAG_LEN];
@@ -392,24 +386,6 @@ struct sheepdog_vdi_attr {
 	char value[SD_MAX_VDI_ATTR_VALUE_LEN];
 };
 
-extern void sd_inode_init(void *data, int depth);
-extern int sd_inode_actor_init(write_node_fn writer, read_node_fn reader);
-extern uint32_t sd_inode_get_vid(const struct sd_inode *inode, uint32_t idx);
-extern int sd_inode_set_vid(struct sd_inode *inode, uint32_t idx, uint32_t);
-extern int sd_inode_set_vid_range(struct sd_inode *inode, uint32_t idx_start,
-				  uint32_t idx_end, uint32_t vdi_id);
-extern int sd_inode_write(struct sd_inode *inode, int flags, bool create, bool);
-extern int sd_inode_write_vid(struct sd_inode *inode,
-			      uint32_t idx, uint32_t vid, uint32_t value,
-			      int flags, bool create, bool direct);
-extern uint32_t sd_inode_get_meta_size(struct sd_inode *inode, size_t size);
-extern void sd_inode_copy_vdis(write_node_fn writer, read_node_fn reader,
-			       uint32_t *data_vdi_id, uint8_t store_policy,
-			       uint8_t nr_copies, uint8_t copy_policy,
-			       struct sd_inode *newi);
-
-typedef void (*index_cb_fn)(struct sd_index *, void *arg, int type);
-void sd_inode_index_walk(const struct sd_inode *inode, index_cb_fn, void *);
 
 /* 64 bit FNV-1a non-zero initial basis */
 #define FNV1A_64_INIT ((uint64_t) 0xcbf29ce484222325ULL)

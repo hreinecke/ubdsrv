@@ -445,6 +445,16 @@ int sd_update_inode(int fd, struct sheepdog_vdi *sd_vdi,
 	return ret;
 }
 
+int sd_update_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
+{
+	int ret;
+
+	ret = sd_read_inode(fd, sd_vdi);
+	if (ret < 0)
+		return ret;
+	return sd_inode_get_vid(sd_vdi, idx);
+}
+
 int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
 {
 	uint32_t vid;
@@ -455,20 +465,7 @@ int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
 	if (vid)
 		return vid;
 
-	ret = sd_read_inode(fd, sd_vdi);
-	if (ret < 0)
-		return ret;
-	return sd_inode_get_vid(sd_vdi, idx);
-}
-
-int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx)
-{
-	int ret;
-
-	ret = sd_read_inode(fd, sd_vdi);
-	if (ret < 0)
-		return ret;
-	return sd_inode_get_vid(sd_vdi, idx);
+	return sd_update_vid(fd, sd_vdi, idx);
 }
 
 int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
@@ -511,23 +508,22 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 }
 
 static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
-			  struct sd_io_context *sd_io, unsigned int idx)
+			  struct sd_io_context *sd_io,
+			  unsigned int idx, uint32_t vid)
 {
-	uint32_t vid;
-
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 
-	pthread_mutex_lock(&sd_vdi->inode_lock);
-	vid = sd_vdi->inode.data_vdi_id[idx];
 	if (!vid) {
 		/* Create new object */
 		vid = sd_vdi->vid;
 		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
 		sd_io->req.obj.cow_oid = 0;
 		/* Update inode */
+		pthread_mutex_lock(&sd_vdi->inode_lock);
 		sd_vdi->inode.data_vdi_id[idx] = vid;
+		pthread_mutex_unlock(&sd_vdi->inode_lock);
 
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		ublk_err("%s: create new oid %lx from vid %x\n",
@@ -538,7 +534,9 @@ static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
 		vid = sd_vdi->vid;
 		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
 		/* Update inode */
+		pthread_mutex_lock(&sd_vdi->inode_lock);
 		sd_vdi->inode.data_vdi_id[idx] = vid;
+		pthread_mutex_unlock(&sd_vdi->inode_lock);
 
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_COW;
@@ -552,12 +550,11 @@ static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
 		ublk_err("%s: write oid %lx\n",
 			 __func__, sd_io->req.obj.oid);
 	}
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
 
 }
 int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io)
+		struct sd_io_context *sd_io, uint32_t vid)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
@@ -567,7 +564,7 @@ int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 	int ret;
 
 	memset(sd_io, 0, sizeof(*sd_io));
-	sd_prep_write(sd_vdi, sd_io, idx);
+	sd_prep_write(sd_vdi, sd_io, idx, vid);
 
 	sd_io->addr = (void *)iod->addr;
 	sd_io->req.obj.offset = start;

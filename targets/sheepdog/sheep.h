@@ -54,7 +54,7 @@ int sd_read_object(int fd, struct sd_io_context *sd_io,
 int sd_read_inode(int fd, struct sheepdog_vdi *vdi);
 int sd_update_inode(int fd, struct sheepdog_vdi *sd_vdi, uint64_t req_oid);
 int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx);
-int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx);
+int sd_update_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx);
 int sd_exec_read(int fd, struct sheepdog_vdi *sd_vdi,
 		 const struct ublksrv_io_desc *iod,
 		 struct sd_io_context *sd_io);
@@ -63,7 +63,7 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 		    struct sd_io_context *sd_io, uint64_t oid);
 int sd_exec_write(int fd, struct sheepdog_vdi *sd_vdi,
 		  const struct ublksrv_io_desc *iod,
-		  struct sd_io_context *sd_io);
+		  struct sd_io_context *sd_io, uint32_t vid);
 
 #ifdef __cplusplus
 }

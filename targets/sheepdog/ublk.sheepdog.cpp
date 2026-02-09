@@ -345,6 +345,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	uint64_t start = offset % object_size;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
+	uint32_t vid;
 	uint64_t oid;
 	int ret = 0;
 
@@ -352,18 +353,26 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		ublk_err("%s: op %u access beyond object size off %lu total %u\n",
 			 __func__, ublk_op, offset, total);
 		ret = -EIO;
+		goto out;
 	}
+	ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
+	if (ret < 0)
+		goto out;
+
+	vid = ret;
+
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
 	sd_io->req.id = data->tag;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io);
+		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io, vid);
 		if (sd_inode_needs_reload(&dev->vdi)) {
 			ret = sd_read_inode(q_ctx->fd, &dev->vdi);
 			if (ret)
 				break;
-			ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io);
+			ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod,
+					    sd_io, vid);
 			if (ret)
 				break;
 		}
@@ -379,14 +388,12 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		}
 		break;
 	case UBLK_IO_OP_READ:
-		ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
-		if (ret < 0)
-			break;
-		if (!ret) {
+		if (!vid) {
 			memset((void *)iod->addr, 0, total);
+			ret = 0;
 			break;
 		}
-		oid = vid_to_data_oid(ret, idx);
+		oid = vid_to_data_oid(vid, idx);
 		ret = sd_read_object(q_ctx->fd, sd_io, oid, (void *)iod->addr,
 				     start, total);
 		if (ret < 0)
@@ -396,21 +403,21 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:
-		ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
-		if (ret < 0)
-			break;
-		if (!ret) {
+		if (!vid) {
 			if (ublk_op == UBLK_IO_OP_WRITE_ZEROES)
 				memset((void *)iod->addr, 0, total);
+			ret = 0;
 			break;
 		}
-	retry_discard:
-		oid = vid_to_vdi_oid(ret);
+		oid = vid_to_vdi_oid(vid);
 		ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod, sd_io, oid);
 		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_clear_vid(q_ctx->fd, &dev->vdi, idx);
-			if (ret > 0)
-				goto retry_discard;
+			ret = sd_update_vid(q_ctx->fd, &dev->vdi, idx);
+			if (ret < 0)
+				break;
+			oid = vid_to_vdi_oid(ret);
+			ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod,
+					      sd_io, oid);
 		}
 		break;
 	default:
@@ -419,7 +426,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		ret = -EOPNOTSUPP;
 		break;
 	}
-
+out:
 	ublk_dbg(UBLK_DBG_IO, "%s: tag %d opcode %x len %u ret %d\n", __func__,
 		 data->tag, sd_io->req.opcode, total, ret);
 	return ret < 0 ? ret : total;
