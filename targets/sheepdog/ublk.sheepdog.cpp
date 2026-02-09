@@ -44,6 +44,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 	char vdi_name[256];
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
+	struct sd_queue_ctx q_ctx;
 
 	ret = ublk_json_read_target_str_info(cdev, "vdi_name", vdi_name);
 	if (ret < 0) {
@@ -92,8 +93,10 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 			  __func__);
 		return fd;
 	}
+	q_ctx.fd = fd;
+	q_ctx.timeout = dev->recv_timeout;
 
-	ret = sd_vdi_lookup(fd, dev->vdi_name, 0, NULL,
+	ret = sd_vdi_lookup(&q_ctx, dev->vdi_name, 0, NULL,
 			    &dev->vdi.vid, dev->unlock ? false : true);
 	if (ret < 0) {
 		dev->vdi.vid = 0;
@@ -101,14 +104,14 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 		return ret;
 	}
 	if (dev->unlock) {
-		ret = sd_vdi_release(fd, &dev->vdi);
+		ret = sd_vdi_release(&q_ctx, &dev->vdi);
 		if (ret < 0) {
 			ublk_err( "%s: failed to release VID %x\n",
 				  __func__, dev->vdi.vid);
 			close(fd);
 			return ret;
 		}
-		ret = sd_vdi_lookup(fd, dev->vdi_name, 0, NULL,
+		ret = sd_vdi_lookup(&q_ctx, dev->vdi_name, 0, NULL,
 				    &dev->vdi.vid, true);
 		if (ret < 0) {
 			dev->vdi.vid = 0;
@@ -116,7 +119,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 			return ret;
 		}
 	}
-	ret = sd_read_inode(fd, &dev->vdi);
+	ret = sd_read_inode(&q_ctx, &dev->vdi);
 	close(fd);
 	if (ret < 0) {
 		ublk_err( "%s: failed to read params for VID %x\n",
@@ -290,11 +293,11 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 		(struct ublksrv_tgt_info *)&q->dev->tgt;
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)tgt->tgt_data;
-	struct sheepdog_queue_ctx *q_ctx;
+	struct sd_queue_ctx *q_ctx;
 	int fd;
 
-	q_ctx = (struct sheepdog_queue_ctx *)
-		calloc(1, sizeof(struct sheepdog_queue_ctx));
+	q_ctx = (struct sd_queue_ctx *)
+		calloc(1, sizeof(struct sd_queue_ctx));
 	if (!q_ctx)
 		return -ENOMEM;
 
@@ -307,6 +310,8 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 		return fd;
 	}
 	q_ctx->fd = fd;
+	q_ctx->timeout = dev->recv_timeout;
+
 	*queue_data_ptr = (void *)q_ctx;
 	return 0;
 }
@@ -317,12 +322,12 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 		(struct ublksrv_tgt_info *)&q->dev->tgt;
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)tgt->tgt_data;
-	struct sheepdog_queue_ctx *q_ctx =
-		(struct sheepdog_queue_ctx *)q->private_data;
+	struct sd_queue_ctx *q_ctx =
+		(struct sd_queue_ctx *)q->private_data;
 
 	if (q->private_data) {
 		if (dev)
-			sd_vdi_release(q_ctx->fd, &dev->vdi);
+			sd_vdi_release(q_ctx, &dev->vdi);
 		close(q_ctx->fd);
 		free(q_ctx);
 	}
@@ -332,8 +337,8 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data,
 		struct ublk_io_tgt *io)
 {
-	struct sheepdog_queue_ctx *q_ctx =
-		(struct sheepdog_queue_ctx *)q->private_data;
+	struct sd_queue_ctx *q_ctx =
+		(struct sd_queue_ctx *)q->private_data;
 	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)q->dev->tgt.tgt_data;
@@ -355,7 +360,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		ret = -EIO;
 		goto out;
 	}
-	ret = sd_resolve_vid(q_ctx->fd, &dev->vdi, idx);
+	ret = sd_resolve_vid(q_ctx, &dev->vdi, idx);
 	if (ret < 0)
 		goto out;
 
@@ -366,12 +371,12 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	sd_io->req.id = data->tag;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-		ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod, sd_io, vid);
+		ret = sd_exec_write(q_ctx, &dev->vdi, iod, sd_io, vid);
 		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_read_inode(q_ctx->fd, &dev->vdi);
+			ret = sd_read_inode(q_ctx, &dev->vdi);
 			if (ret)
 				break;
-			ret = sd_exec_write(q_ctx->fd, &dev->vdi, iod,
+			ret = sd_exec_write(q_ctx, &dev->vdi, iod,
 					    sd_io, vid);
 			if (ret)
 				break;
@@ -379,12 +384,12 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		if (sd_io->req.opcode != SD_OP_CREATE_AND_WRITE_OBJ)
 			break;
 		oid = sd_io->req.obj.oid;
-		ret = sd_update_inode(q_ctx->fd, &dev->vdi, oid);
+		ret = sd_update_inode(q_ctx, &dev->vdi, oid);
 		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_read_inode(q_ctx->fd, &dev->vdi);
+			ret = sd_read_inode(q_ctx, &dev->vdi);
 			if (ret)
 				break;
-			ret = sd_update_inode(q_ctx->fd, &dev->vdi, oid);
+			ret = sd_update_inode(q_ctx, &dev->vdi, oid);
 		}
 		break;
 	case UBLK_IO_OP_READ:
@@ -394,7 +399,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 			break;
 		}
 		oid = vid_to_data_oid(vid, idx);
-		ret = sd_read_object(q_ctx->fd, sd_io, oid, (void *)iod->addr,
+		ret = sd_read_object(q_ctx, sd_io, oid, (void *)iod->addr,
 				     start, total);
 		if (ret < 0)
 			ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
@@ -410,13 +415,13 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 			break;
 		}
 		oid = vid_to_vdi_oid(vid);
-		ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod, sd_io, oid);
+		ret = sd_exec_discard(q_ctx, &dev->vdi, iod, sd_io, oid);
 		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_update_vid(q_ctx->fd, &dev->vdi, idx);
+			ret = sd_update_vid(q_ctx, &dev->vdi, idx);
 			if (ret < 0)
 				break;
 			oid = vid_to_vdi_oid(ret);
-			ret = sd_exec_discard(q_ctx->fd, &dev->vdi, iod,
+			ret = sd_exec_discard(q_ctx, &dev->vdi, iod,
 					      sd_io, oid);
 		}
 		break;
