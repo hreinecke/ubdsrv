@@ -35,7 +35,7 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
-static uint32_t sd_inode_get_idx(struct sheepdog_vdi *sd_vdi,
+static uint32_t sd_inode_get_vid(struct sheepdog_vdi *sd_vdi,
 				       uint32_t idx)
 {
 	uint32_t vid;
@@ -450,7 +450,7 @@ int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
 	uint32_t vid;
 	int ret;
 
-	vid = sd_inode_get_idx(sd_vdi, idx);
+	vid = sd_inode_get_vid(sd_vdi, idx);
 	/* Return if object is present */
 	if (vid)
 		return vid;
@@ -458,7 +458,7 @@ int sd_resolve_vid(int fd, struct sheepdog_vdi *sd_vdi, uint32_t idx)
 	ret = sd_read_inode(fd, sd_vdi);
 	if (ret < 0)
 		return ret;
-	return sd_inode_get_idx(sd_vdi, idx);
+	return sd_inode_get_vid(sd_vdi, idx);
 }
 
 int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx)
@@ -468,7 +468,7 @@ int sd_clear_vid(int fd, struct sheepdog_vdi *sd_vdi, int idx)
 	ret = sd_read_inode(fd, sd_vdi);
 	if (ret < 0)
 		return ret;
-	return sd_inode_get_idx(sd_vdi, idx);
+	return sd_inode_get_vid(sd_vdi, idx);
 }
 
 int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
