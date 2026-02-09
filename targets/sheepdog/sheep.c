@@ -476,6 +476,7 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t idx = offset / object_size;
 	uint32_t new_vid = 0;
+	bool cleared = false;
 	int ret = 0;
 
 	sd_io->req.proto_ver = SD_PROTO_VER;
@@ -484,9 +485,13 @@ int sd_exec_discard(int fd, struct sheepdog_vdi *sd_vdi,
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 
 	pthread_mutex_lock(&sd_vdi->inode_lock);
+	if (!sd_vdi->inode.data_vdi_id[idx])
+		cleared = true;
 	sd_vdi->inode.data_vdi_id[idx] = new_vid;
 	pthread_mutex_unlock(&sd_vdi->inode_lock);
 
+	if (cleared)
+		return 0;
 	sd_io->addr = (void *)&new_vid;
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(new_vid) * idx;
