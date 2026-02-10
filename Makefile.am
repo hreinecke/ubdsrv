@@ -11,6 +11,8 @@ SUBDIRS = doc include lib tests
 
 AM_CXXFLAGS = -std=c++20 -Wunused
 
+AM_LDFLAGS = -luuid
+
 TGT_DIR = targets
 TGT_INC = $(top_srcdir)/$(TGT_DIR)/include
 
