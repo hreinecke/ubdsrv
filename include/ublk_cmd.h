@@ -593,7 +593,7 @@ struct ublk_params {
 #define UBLK_PARAM_TYPE_ZONED           (1 << 3)
 #define UBLK_PARAM_TYPE_DMA_ALIGN       (1 << 4)
 #define UBLK_PARAM_TYPE_SEGMENT         (1 << 5)
-#define UBLK_PARAM_TYPE_UUID            (1 << 6)
+#define UBLK_PARAM_TYPE_UUID            (1 << 7)
 	__u32	types;			/* types of parameter included */
 
 	struct ublk_param_basic		basic;

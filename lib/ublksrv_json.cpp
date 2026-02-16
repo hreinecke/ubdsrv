@@ -456,7 +456,6 @@ int ublk_json_write_target_base(const struct ublksrv_ctrl_dev *cdev,
 	pthread_mutex_unlock(&j->lock);
 
 	return ret;
-
 }
 
 int ublksrv_json_read_target_base_info(const char *jbuf,
