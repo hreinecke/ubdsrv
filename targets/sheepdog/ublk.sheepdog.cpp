@@ -333,16 +333,10 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 
 static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 {
-	struct ublksrv_tgt_info *tgt =
-		(struct ublksrv_tgt_info *)&q->dev->tgt;
-	struct sheepdog_dev *dev =
-		(struct sheepdog_dev *)tgt->tgt_data;
 	struct sd_queue_ctx *q_ctx =
 		(struct sd_queue_ctx *)q->private_data;
 
 	if (q->private_data) {
-		if (dev)
-			sd_vdi_release(q_ctx, &dev->vdi);
 		close(q_ctx->fd);
 		free(q_ctx);
 	}
@@ -469,6 +463,16 @@ static void sheepdog_deinit_tgt(const struct ublksrv_dev *ub_dev)
 		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
 
 	if (dev) {
+		struct sd_queue_ctx q_ctx;
+
+		q_ctx.fd = sd_connect(dev->cluster_host, dev->cluster_port,
+				      dev->send_timeout, dev->recv_timeout);
+		if (q_ctx.fd >= 0) {
+			q_ctx.timeout = dev->recv_timeout;
+
+			sd_vdi_release(&q_ctx, &dev->vdi);
+			close(q_ctx.fd);
+		}
 		pthread_mutex_destroy(&dev->vdi.inode_lock);
 		free(dev);
 	}
