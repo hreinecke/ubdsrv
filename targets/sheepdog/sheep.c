@@ -477,28 +477,28 @@ int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		       uint32_t idx)
+		  uint32_t idx, uint32_t *vid)
 {
 	int ret;
 
 	ret = sd_read_inode(ctx, sd_vdi);
 	if (ret < 0)
 		return ret;
-	return sd_inode_get_vid(sd_vdi, idx);
+	*vid = sd_inode_get_vid(sd_vdi, idx);
+	return 0;
 }
 
 int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-			uint32_t idx)
+		   uint32_t idx, uint32_t *vid)
 {
-	uint32_t vid;
 	int ret;
 
-	vid = sd_inode_get_vid(sd_vdi, idx);
+	*vid = sd_inode_get_vid(sd_vdi, idx);
 	/* Return if object is present */
-	if (vid)
-		return vid;
+	if (*vid)
+		return 0;
 
-	return sd_update_vid(ctx, sd_vdi, idx);
+	return sd_update_vid(ctx, sd_vdi, idx, vid);
 }
 
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,

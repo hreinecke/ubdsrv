@@ -56,9 +56,9 @@ int sd_read_inode(struct sd_queue_ctx *ctx, struct sd_vdi *vdi);
 int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		    uint64_t req_oid);
 int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		   uint32_t idx);
+		   uint32_t idx, uint32_t *vid);
 int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		  uint32_t idx);
+		  uint32_t idx, uint32_t *vid);
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		 const struct ublksrv_io_desc *iod,
 		 struct sd_io_context *sd_io);
