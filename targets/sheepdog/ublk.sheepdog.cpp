@@ -22,7 +22,7 @@ struct sheepdog_dev {
 	char cluster_host[256];
 	char cluster_port[16];
 	char vdi_name[256];
-	struct sheepdog_vdi vdi;
+	struct sd_vdi vdi;
 	unsigned long send_timeout;
 	unsigned long recv_timeout;
 	bool unlock;
@@ -376,9 +376,11 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		goto out;
 	}
 	ret = sd_resolve_vid(q_ctx, &dev->vdi, idx);
-	if (ret < 0)
+	if (ret < 0) {
+		ublk_err("%s: op %u failed to resolve vid %u idx %u, error %d\n",
+			 __func__, ublk_op, dev->vdi.vid, idx);
 		goto out;
-
+	}
 	vid = ret;
 
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
@@ -433,9 +435,12 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		ret = sd_exec_discard(q_ctx, &dev->vdi, iod, sd_io, oid);
 		if (sd_inode_needs_reload(&dev->vdi)) {
 			ret = sd_update_vid(q_ctx, &dev->vdi, idx);
-			if (ret < 0)
+			if (ret < 0) {
+				ublk_err("%s: tag %u failed to update vid %u idx %u\n",
+					 __func__, sd_io->req.id, dev->vdi.vid, idx);
 				break;
-			oid = vid_to_vdi_oid(ret);
+			}
+			oid = vid_to_vdi_oid(vid);
 			ret = sd_exec_discard(q_ctx, &dev->vdi, iod,
 					      sd_io, oid);
 		}

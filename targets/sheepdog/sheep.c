@@ -35,7 +35,7 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
-static uint32_t sd_inode_get_vid(struct sheepdog_vdi *sd_vdi,
+static uint32_t sd_inode_get_vid(struct sd_vdi *sd_vdi,
 				       uint32_t idx)
 {
 	uint32_t vid;
@@ -47,7 +47,7 @@ static uint32_t sd_inode_get_vid(struct sheepdog_vdi *sd_vdi,
 	return vid;
 }
 
-static void sd_inode_invalidate(struct sheepdog_vdi *sd_vdi,
+static void sd_inode_invalidate(struct sd_vdi *sd_vdi,
 				bool invalidated)
 {
 	pthread_mutex_lock(&sd_vdi->inode_lock);
@@ -55,7 +55,7 @@ static void sd_inode_invalidate(struct sheepdog_vdi *sd_vdi,
 	pthread_mutex_unlock(&sd_vdi->inode_lock);
 }
 
-static void sd_inode_is_snapshot(struct sheepdog_vdi *sd_vdi,
+static void sd_inode_is_snapshot(struct sd_vdi *sd_vdi,
 				 bool snapshot)
 {
 	pthread_mutex_lock(&sd_vdi->inode_lock);
@@ -63,7 +63,7 @@ static void sd_inode_is_snapshot(struct sheepdog_vdi *sd_vdi,
 	pthread_mutex_unlock(&sd_vdi->inode_lock);
 }
 
-static void sd_inode_evaluate_result(struct sheepdog_vdi *sd_vdi,
+static void sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
 				     struct sd_io_context *sd_io)
 {
 	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
@@ -72,7 +72,7 @@ static void sd_inode_evaluate_result(struct sheepdog_vdi *sd_vdi,
 		sd_inode_is_snapshot(sd_vdi, true);
 }
 
-bool sd_inode_needs_reload(struct sheepdog_vdi *sd_vdi)
+bool sd_inode_needs_reload(struct sd_vdi *sd_vdi)
 {
 	bool needs_reload;
 
@@ -83,7 +83,7 @@ bool sd_inode_needs_reload(struct sheepdog_vdi *sd_vdi)
 }
 
 /* locking is done by the caller */
-static inline bool is_data_obj_writable(struct sheepdog_vdi *sd_vdi,
+static inline bool is_data_obj_writable(struct sd_vdi *sd_vdi,
 					uint32_t idx)
 {
 	bool writable;
@@ -339,7 +339,7 @@ int sd_vdi_lookup(struct sd_queue_ctx *ctx, const char *vdi_name,
 	return 0;
 }
 
-int sd_vdi_release(struct sd_queue_ctx *ctx, struct sheepdog_vdi *vdi)
+int sd_vdi_release(struct sd_queue_ctx *ctx, struct sd_vdi *vdi)
 {
 	struct sd_io_context sd_io = { 0 };
 	int ret;
@@ -393,7 +393,7 @@ retry:
 	return ret < 0 ? ret : 0;
 }
 
-int sd_read_inode(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi)
+int sd_read_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi)
 {
 	struct sd_io_context sd_io = { 0 };
 	int need_reload = 0, ret;
@@ -449,7 +449,7 @@ retry:
 	return ret;
 }
 
-int sd_update_inode(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi,
+int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		    uint64_t req_oid)
 {
 	struct sd_io_context sd_io = { 0 };
@@ -476,7 +476,8 @@ int sd_update_inode(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi,
 	return ret;
 }
 
-int sd_update_vid(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi, uint32_t idx)
+int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
+		       uint32_t idx)
 {
 	int ret;
 
@@ -486,7 +487,8 @@ int sd_update_vid(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi, uint32_
 	return sd_inode_get_vid(sd_vdi, idx);
 }
 
-int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi, uint32_t idx)
+int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
+			uint32_t idx)
 {
 	uint32_t vid;
 	int ret;
@@ -499,7 +501,7 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi, uint32
 	return sd_update_vid(ctx, sd_vdi, idx);
 }
 
-int sd_exec_discard(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi,
+int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io, uint64_t oid)
 {
@@ -543,7 +545,7 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi,
 	return ret;
 }
 
-static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
+static void sd_prep_write(struct sd_vdi *sd_vdi,
 			  struct sd_io_context *sd_io,
 			  unsigned int idx, uint32_t vid)
 {
@@ -589,7 +591,7 @@ static void sd_prep_write(struct sheepdog_vdi *sd_vdi,
 
 }
 
-int sd_exec_write(struct sd_queue_ctx *ctx, struct sheepdog_vdi *sd_vdi,
+int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
 		struct sd_io_context *sd_io, uint32_t vid)
 {
