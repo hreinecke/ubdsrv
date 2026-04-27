@@ -415,12 +415,17 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 			break;
 		}
 		oid = vid_to_data_oid(vid, idx);
-		ret = sd_read_object(q_ctx, sd_io, oid, (void *)iod->addr,
-				     start, total);
-		if (ret < 0)
-			ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
-				 __func__, sd_io->req.id, sd_io->req.obj.oid,
-				 sd_io->req.opcode, sd_io->rsp.result);
+		ret = sd_exec_read(q_ctx, &dev->vdi, iod, sd_io, oid);
+		if (sd_inode_needs_reload(&dev->vdi)) {
+			ret = sd_update_vid(q_ctx, &dev->vdi, idx, &vid);
+			if (ret < 0) {
+				ublk_err("%s: tag %u failed to update vid %u idx %u\n",
+					 __func__, sd_io->req.id, dev->vdi.vid, idx);
+				break;
+			}
+			oid = vid_to_data_oid(vid, idx);
+			ret = sd_exec_read(q_ctx, &dev->vdi, iod, sd_io, oid);
+		}
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:

@@ -61,7 +61,7 @@ int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		  uint32_t idx, uint32_t *vid);
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		 const struct ublksrv_io_desc *iod,
-		 struct sd_io_context *sd_io);
+		 struct sd_io_context *sd_io, uint64_t oid);
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		    const struct ublksrv_io_desc *iod,
 		    struct sd_io_context *sd_io, uint64_t oid);
