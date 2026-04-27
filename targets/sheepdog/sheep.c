@@ -367,7 +367,6 @@ retry:
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_READ_OBJ;
 	sd_io->req.data_length = len;
-	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 	sd_io->req.obj.oid = oid;
 	sd_io->req.obj.offset = offset;
 	sd_io->addr = buf;
