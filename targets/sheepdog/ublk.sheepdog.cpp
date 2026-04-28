@@ -341,7 +341,7 @@ static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 		(struct sd_queue_ctx *)q->private_data;
 
 	if (q->private_data) {
-		if (dev)
+		if (dev && q->q_id == 0)
 			sd_vdi_release(q_ctx, &dev->vdi);
 		close(q_ctx->fd);
 		free(q_ctx);
