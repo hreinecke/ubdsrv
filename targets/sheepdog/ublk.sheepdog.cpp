@@ -170,7 +170,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	};
 	int opt, lbs = 9, ret;
 	unsigned long send_tmo = SD_SEND_TMO, recv_tmo = SD_RECV_TMO;
-	char *vdi_name = NULL;
+	char *vdi_name = NULL, *env;
 	uuid_t uuid;
 	const char *cluster_host = "127.0.0.1";
 	const char *cluster_port = "7000";
@@ -203,6 +203,45 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	strcpy(tgt_json.name, "sheepdog");
 	uuid_clear(uuid);
 
+	if ((env = getenv("UBLK_SHEEPDOG_VDI_NAME")))
+		vdi_name = env;
+
+	if ((env = getenv("UBLK_SHEEPDOG_HOST")))
+		cluster_host = env;
+
+	if ((env = getenv("UBLK_SHEEPDOG_PORT")))
+		cluster_port = env;
+
+	if ((env = getenv("UBLK_SHEEPDOG_UUID"))) {
+		if (uuid_parse(env, uuid))
+			uuid_clear(uuid);
+	}
+
+	if ((env = getenv("UBLK_SHEEPDOG_LBS"))) {
+		errno = 0;
+		lbs = strtoul(env, NULL, 10);
+		if (errno || lbs < 9 || lbs > 22)
+			lbs = 9;
+	}
+
+	if ((env = getenv("UBLK_SHEEPDOG_SEND_TMO"))) {
+		errno = 0;
+		send_tmo = strtoul(env, NULL, 10);
+		if (send_tmo == ULONG_MAX || errno) {
+			send_tmo = SD_SEND_TMO;
+		}
+	}
+
+	if ((env = getenv("UBLK_SHEEPDOG_RECV_TMO"))) {
+		errno = 0;
+		recv_tmo = strtoul(env, NULL, 10);
+		if (recv_tmo == ULONG_MAX || errno) {
+			recv_tmo = SD_RECV_TMO;
+		}
+		if (recv_tmo < send_tmo)
+			recv_tmo = SD_RECV_TMO;
+	}
+
 	while ((opt = getopt_long(argc, argv, "h:p:v:b:s:r:U:",
 				  sheepdog_longopts, NULL)) != -1) {
 		switch (opt) {
@@ -212,9 +251,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		case 'b':
 			errno = 0;
 			lbs = strtoul(optarg, NULL, 10);
-			if (lbs == ULONG_MAX && errno)
-				return -EINVAL;
-			if (lbs < 9)
+			if (errno || lbs < 9 || lbs > 22)
 				return -EINVAL;
 			break;
 		case 'h':
