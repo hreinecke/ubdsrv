@@ -16,22 +16,20 @@
 
 #include "ublksrv_tgt.h"
 #include "sheepdog_proto.h"
+#include "sheepdog.h"
 #include "sheep.h"
 
 struct sheepdog_dev {
-	char cluster_host[256];
-	char cluster_port[16];
+	char sd_host[256];
 	char vdi_name[256];
-	struct sd_vdi vdi;
-	unsigned long send_timeout;
-	unsigned long recv_timeout;
-	bool unlock;
+	struct sd_cluster *cluster;
+	struct sd_vdi *vdi;
 };
 
-static inline struct sd_io_context *
+static inline struct sd_request *
 io_tgt_to_sd_io(const struct ublk_io_tgt *io)
 {
-	return (struct sd_io_context *)(io + 1);
+	return (struct sd_request *)(io + 1);
 }
 
 static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
@@ -45,7 +43,6 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 	char vdi_name[256];
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
-	struct sd_queue_ctx q_ctx;
 
 	ret = ublk_json_read_target_str_info(cdev, "vdi_name", vdi_name);
 	if (ret < 0) {
@@ -55,82 +52,30 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 	}
 	strncpy(dev->vdi_name, vdi_name, 256);
 
-	ret = ublk_json_read_target_str_info(cdev, "sheepdog_host",
-					     dev->cluster_host);
+	ret = ublk_json_read_target_str_info(cdev, "sheepdog_cluster",
+					     dev->sd_host);
 	if (ret) {
 		ublk_err( "%s: read hostname failed, error %d\n",
 				__func__, ret);
 		return ret;
 	}
 
-	ret = ublk_json_read_target_str_info(cdev, "sheepdog_port",
-					     dev->cluster_port);
-	if (ret) {
-		ublk_err( "%s: read port id failed, error %d\n",
-				__func__, ret);
-		return ret;
-	}
-
-	ret = ublk_json_read_target_ulong_info(cdev, "send_timeout",
-					       &dev->send_timeout);
-	if (ret) {
-		ublk_err( "%s: read send timeout failed, error %d\n",
-			  __func__, ret);
-		return ret;
-	}
-
-	ret = ublk_json_read_target_ulong_info(cdev, "recv_timeout",
-					       &dev->recv_timeout);
-	if (ret) {
-		ublk_err( "%s: read recv timeout failed, error %d\n",
-			  __func__, ret);
-		return ret;
-	}
-
-	fd = sd_connect(dev->cluster_host, dev->cluster_port,
-			dev->send_timeout, dev->recv_timeout);
+	dev->cluster = sd_connect(dev->sd_host);
 	if (fd < 0) {
 		ublk_err( "%s: cannot connect to sheepdog cluster\n",
 			  __func__);
 		return fd;
 	}
-	q_ctx.fd = fd;
-	q_ctx.timeout = dev->recv_timeout;
 
-	ret = sd_vdi_lookup(&q_ctx, dev->vdi_name, 0, NULL,
-			    &dev->vdi.vid, dev->unlock ? false : true);
-	if (ret < 0) {
-		dev->vdi.vid = 0;
+	dev->vdi = sd_vdi_open(dev->cluster, dev->vdi_name);
+	if (!dev->vdi) {
 		close(fd);
-		return ret;
-	}
-	if (dev->unlock) {
-		ret = sd_vdi_release(&q_ctx, &dev->vdi);
-		if (ret < 0) {
-			ublk_err( "%s: failed to release VID %x\n",
-				  __func__, dev->vdi.vid);
-			close(fd);
-			return ret;
-		}
-		ret = sd_vdi_lookup(&q_ctx, dev->vdi_name, 0, NULL,
-				    &dev->vdi.vid, true);
-		if (ret < 0) {
-			dev->vdi.vid = 0;
-			close(fd);
-			return ret;
-		}
-	}
-	ret = sd_read_inode(&q_ctx, &dev->vdi);
-	close(fd);
-	if (ret < 0) {
-		ublk_err( "%s: failed to read params for VID %x\n",
-			  __func__, dev->vdi.vid);
 		return ret;
 	}
 
 	tgt->io_data_size = sizeof(struct ublk_io_tgt) +
-		sizeof(struct sd_io_context);
-	tgt->dev_size = dev->vdi.inode.vdi_size >> 9;
+		sizeof(struct sd_request);
+	tgt->dev_size = dev->vdi->inode->header.vdi_size >> 9;
 	tgt->tgt_ring_depth = info->queue_depth;
 	tgt->nr_fds = 0;
 	tgt->extra_ios = 0;
@@ -140,13 +85,10 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 
 static int sheepdog_recover_tgt(struct ublksrv_dev *ub_dev, int type)
 {
-	struct sheepdog_dev *dev;
-
 	ub_dev->tgt.tgt_data =
 		(struct sheepdog_dev *)calloc(1, sizeof(struct sheepdog_dev));
-	dev = (struct sheepdog_dev *)ub_dev->tgt.tgt_data;
-	dev->unlock = true;
-	pthread_mutex_init(&dev->vdi.inode_lock, NULL);
+	if (!ub_dev->tgt.tgt_data)
+		return -ENOMEM;
 	return sheepdog_setup_tgt(ub_dev, type);
 }
 
@@ -158,23 +100,19 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 		ublksrv_ctrl_get_dev_info(cdev);
 	int unlock = 0;
 	static const struct option sheepdog_longopts[] = {
-		{ "host",	required_argument, NULL, 'h'},
-		{ "port",	required_argument, NULL, 'p'},
+		{ "cluster",	required_argument, NULL, 'c'},
 		{ "vdi_name",	required_argument, NULL, 'v' },
-		{ "send_tmo",	required_argument, NULL, 's'},
-		{ "read_tmo",	required_argument, NULL, 'r'},
 		{ "lbs",	required_argument, NULL, 'b'},
 		{ "uuid",	required_argument, NULL, 'U'},
 		{ "unlock",	no_argument, &unlock, 'u'},
 		{ NULL }
 	};
 	int opt, lbs = 9, ret;
-	unsigned long send_tmo = SD_SEND_TMO, recv_tmo = SD_RECV_TMO;
 	char *vdi_name = NULL;
 	uuid_t uuid;
-	const char *cluster_host = "127.0.0.1";
-	const char *cluster_port = "7000";
+	const char *sd_cluster = "127.0.0.1:7000";
 	struct sheepdog_dev *dev;
+	struct sd_inode_header *vdi_header;
 	struct ublksrv_tgt_base_json tgt_json = { 0 };
 	struct ublk_params p = {
 		.types = UBLK_PARAM_TYPE_BASIC | UBLK_PARAM_TYPE_DISCARD |
@@ -203,7 +141,7 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	strcpy(tgt_json.name, "sheepdog");
 	uuid_clear(uuid);
 
-	while ((opt = getopt_long(argc, argv, "h:p:v:b:s:r:U:",
+	while ((opt = getopt_long(argc, argv, "c:v:b:U:",
 				  sheepdog_longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'v':
@@ -217,27 +155,8 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 			if (lbs < 9)
 				return -EINVAL;
 			break;
-		case 'h':
-			cluster_host = optarg;
-			break;
-		case 'p':
-			cluster_port = optarg;
-			break;
-		case 's':
-			errno = 0;
-			send_tmo = strtoul(optarg, NULL, 10);
-			if (send_tmo == ULONG_MAX && errno)
-				return -EINVAL;
-			if (send_tmo < 5)
-				return -EINVAL;
-			break;
-		case 'r':
-			errno = 0;
-			recv_tmo = strtoul(optarg, NULL, 10);
-			if (recv_tmo == ULONG_MAX && errno)
-				return -EINVAL;
-			if (recv_tmo < send_tmo)
-				return -EINVAL;
+		case 'c':
+			sd_cluster = optarg;
 			break;
 		case 'U':
 			if (uuid_parse(optarg, uuid))
@@ -252,38 +171,32 @@ static int sheepdog_init_tgt(struct ublksrv_dev *ub_dev, int type,
 	}
 
 	ublk_json_write_dev_info(cdev);
-	ublk_json_write_tgt_str(cdev, "sheepdog_host", cluster_host);
-	ublk_json_write_tgt_str(cdev, "sheepdog_port", cluster_port);
+	ublk_json_write_tgt_str(cdev, "sheepdog_cluster", sd_cluster);
 	ublk_json_write_tgt_str(cdev, "vdi_name", vdi_name);
 	ublk_json_write_tgt_ulong(cdev, "logical_block_shift", lbs);
-	ublk_json_write_tgt_ulong(cdev, "send_timeout", send_tmo);
-	ublk_json_write_tgt_ulong(cdev, "recv_timeout", recv_tmo);
 
 	ub_dev->tgt.tgt_data = (struct sheepdog_dev *)calloc(1, sizeof(*dev));
+	if (!ub_dev->tgt.tgt_data)
+		return -ENOMEM;
 	dev = (struct sheepdog_dev *)ub_dev->tgt.tgt_data;
-	pthread_mutex_init(&dev->vdi.inode_lock, NULL);
-	if (unlock)
-		dev->unlock = true;
-	else
-		dev->unlock = false;
 
 	ret = sheepdog_setup_tgt(ub_dev, type);
 	if (ret < 0)
 		return ret;
 
-	ublk_json_write_tgt_ulong(cdev, "vid", dev->vdi.vid);
-	ublk_json_write_tgt_ulong(cdev, "ctime", dev->vdi.inode.create_time);
-	if (uuid_is_null(uuid) && SD_INODE_USE_UUID(&dev->vdi.inode)) {
-		memcpy((char *)uuid, &dev->vdi.inode.vm_clock_nsec, 8);
-		memcpy((char *)(uuid + 8), &dev->vdi.inode.vm_state_size, 8);
+	ublk_json_write_tgt_ulong(cdev, "vid", dev->vdi->vid);
+	ublk_json_write_tgt_ulong(cdev, "ctime", vdi_header->create_time);
+	if (uuid_is_null(uuid) && SD_INODE_USE_UUID(vdi_header)) {
+		memcpy((char *)uuid, &vdi_header->vm_clock_nsec, 8);
+		memcpy((char *)(uuid + 8), &vdi_header->vm_state_size, 8);
 	}
 	if (!uuid_is_null(uuid)) {
 		memcpy(p.uuid.uuid, uuid, 16);
 		p.types |= UBLK_PARAM_TYPE_UUID;
 	}
-	p.basic.physical_bs_shift = dev->vdi.inode.block_size_shift;
+	p.basic.physical_bs_shift = vdi_header->block_size_shift;
 	p.basic.chunk_sectors = 1 << (p.basic.physical_bs_shift - 9);
-	p.basic.dev_sectors = dev->vdi.inode.vdi_size >> 9;
+	p.basic.dev_sectors = vdi_header->vdi_size >> 9;
 	p.discard.discard_granularity = p.basic.chunk_sectors;
 	p.discard.max_discard_sectors = p.basic.chunk_sectors;
 	if (lbs > 9) {
@@ -308,24 +221,14 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 		(struct ublksrv_tgt_info *)&q->dev->tgt;
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)tgt->tgt_data;
-	struct sd_queue_ctx *q_ctx;
-	int fd;
+	struct sd_cluster *q_ctx;
 
-	q_ctx = (struct sd_queue_ctx *)
-		calloc(1, sizeof(struct sd_queue_ctx));
-	if (!q_ctx)
-		return -ENOMEM;
-
-	fd = sd_connect(dev->cluster_host, dev->cluster_port,
-			dev->send_timeout, dev->recv_timeout);
-	if (fd < 0) {
+	q_ctx = sd_connect(dev->sd_host);
+	if (!q_ctx) {
 		ublk_err("%s: failed to connect to sheepdog\n",
 			 __func__);
-		free(q_ctx);
-		return fd;
+		return -errno;
 	}
-	q_ctx->fd = fd;
-	q_ctx->timeout = dev->recv_timeout;
 
 	*queue_data_ptr = (void *)q_ctx;
 	return 0;
@@ -333,17 +236,11 @@ static int sheepdog_init_queue(const struct ublksrv_queue *q,
 
 static void sheepdog_deinit_queue(const struct ublksrv_queue *q)
 {
-	struct ublksrv_tgt_info *tgt =
-		(struct ublksrv_tgt_info *)&q->dev->tgt;
-	struct sheepdog_dev *dev =
-		(struct sheepdog_dev *)tgt->tgt_data;
-	struct sd_queue_ctx *q_ctx =
-		(struct sd_queue_ctx *)q->private_data;
+	struct sd_cluster *q_ctx =
+		(struct sd_cluster *)q->private_data;
 
 	if (q->private_data) {
-		if (dev)
-			sd_vdi_release(q_ctx, &dev->vdi);
-		close(q_ctx->fd);
+		sd_disconnect(q_ctx);
 		free(q_ctx);
 	}
 }
@@ -352,97 +249,50 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		const struct ublk_io_data *data,
 		struct ublk_io_tgt *io)
 {
-	struct sd_queue_ctx *q_ctx =
-		(struct sd_queue_ctx *)q->private_data;
-	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
+	struct sd_cluster *q_ctx =
+		(struct sd_cluster *)q->private_data;
+	struct sd_request *sd_req = io_tgt_to_sd_io(io);
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)q->dev->tgt.tgt_data;
 	const struct ublksrv_io_desc *iod = data->iod;
-	uint32_t object_size = SD_OBJECT_SIZE(&dev->vdi);
+	uint32_t object_size = SD_OBJECT_SIZE(dev->vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
-	uint32_t idx = offset / object_size;
 	uint64_t start = offset % object_size;
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
-	uint32_t vid;
-	uint64_t oid;
 	int ret = 0;
 
 	if (total > len) {
 		ublk_err("%s: op %u access beyond object size off %lu total %u\n",
 			 __func__, ublk_op, offset, total);
-		ret = -EIO;
-		goto out;
+		return -EIO;
 	}
-	ret = sd_resolve_vid(q_ctx, &dev->vdi, idx, &vid);
-	if (ret < 0) {
-		ublk_err("%s: op %u failed to resolve vid %u idx %u, error %d\n",
-			 __func__, ublk_op, dev->vdi.vid, idx);
-		goto out;
-	}
-
-	memset(&sd_io->req, 0, sizeof(sd_io->req));
-	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
-	sd_io->req.id = data->tag;
+	sd_req->tag = data->tag;
+	sd_req->vdi = dev->vdi;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-		ret = sd_exec_write(q_ctx, &dev->vdi, iod, sd_io, vid);
-		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_read_inode(q_ctx, &dev->vdi);
-			if (ret)
-				break;
-			ret = sd_exec_write(q_ctx, &dev->vdi, iod,
-					    sd_io, vid);
-			if (ret)
-				break;
-		}
-		if (sd_io->req.opcode != SD_OP_CREATE_AND_WRITE_OBJ)
-			break;
-		oid = sd_io->req.obj.oid;
-		ret = sd_update_inode(q_ctx, &dev->vdi, oid);
-		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_read_inode(q_ctx, &dev->vdi);
-			if (ret)
-				break;
-			ret = sd_update_inode(q_ctx, &dev->vdi, oid);
-		}
+		ret = sd_vdi_write(q_ctx, sd_req, (void *)iod->addr,
+				   total, offset);
+		if (ret < 0)
+			ublk_err("%s: tag %u opcode %x ret %d\n",
+				 __func__, sd_req->tag, ublk_op, ret);
 		break;
 	case UBLK_IO_OP_READ:
-		if (!vid) {
-			memset((void *)iod->addr, 0, total);
-			ret = 0;
-			break;
-		}
-		oid = vid_to_data_oid(vid, idx);
-		ret = sd_read_object(q_ctx, sd_io, oid, (void *)iod->addr,
-				     start, total);
+		ret = sd_vdi_read(q_ctx, sd_req, (void *)iod->addr,
+				  total, offset);
 		if (ret < 0)
-			ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
-				 __func__, sd_io->req.id, sd_io->req.obj.oid,
-				 sd_io->req.opcode, sd_io->rsp.result);
+			ublk_err("%s: tag %u opcode %x ret %d\n",
+				 __func__, sd_req->tag, ublk_op, ret);
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:
-		if (!vid) {
-			if (ublk_op == UBLK_IO_OP_WRITE_ZEROES)
-				memset((void *)iod->addr, 0, total);
-			ret = 0;
-			break;
-		}
-		oid = vid_to_vdi_oid(vid);
-		ret = sd_exec_discard(q_ctx, &dev->vdi, iod, sd_io, oid);
-		if (sd_inode_needs_reload(&dev->vdi)) {
-			ret = sd_update_vid(q_ctx, &dev->vdi, idx, &vid);
-			if (ret < 0) {
-				ublk_err("%s: tag %u failed to update vid %u idx %u\n",
-					 __func__, sd_io->req.id, dev->vdi.vid, idx);
-				break;
-			}
-			oid = vid_to_vdi_oid(vid);
-			ret = sd_exec_discard(q_ctx, &dev->vdi, iod,
-					      sd_io, oid);
-		}
+		ret = sd_vdi_discard(q_ctx, sd_req,
+				     UBLK_IO_OP_DISCARD ?
+				     NULL : (void *)iod->addr, total, offset);
+		if (ret < 0)
+			ublk_err("%s: tag %u opcode %x ret %d\n",
+				 __func__, sd_req->tag, ublk_op, ret);
 		break;
 	default:
 		ublk_err("%s: tag %u op %u not supported\n",
@@ -450,9 +300,6 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		ret = -EOPNOTSUPP;
 		break;
 	}
-out:
-	ublk_dbg(UBLK_DBG_IO, "%s: tag %d opcode %x len %u ret %d\n", __func__,
-		 data->tag, sd_io->req.opcode, total, ret);
 	return ret < 0 ? ret : total;
 }
 
@@ -473,7 +320,15 @@ static void sheepdog_deinit_tgt(const struct ublksrv_dev *ub_dev)
 		(struct sheepdog_dev *)ub_dev->tgt.tgt_data;
 
 	if (dev) {
-		pthread_mutex_destroy(&dev->vdi.inode_lock);
+		if (dev->vdi) {
+			sd_vdi_close(dev->cluster, dev->vdi);
+			dev->vdi = NULL;
+		}
+		if (dev->cluster) {
+			sd_disconnect(dev->cluster);
+			free(dev->cluster);
+			dev->cluster = NULL;
+		}
 		free(dev);
 	}
 }

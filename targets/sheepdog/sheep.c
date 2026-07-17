@@ -33,6 +33,7 @@
 #include "ublksrv.h"
 #include "ublksrv_utils.h"
 #include "sheepdog_proto.h"
+#include "sheepdog.h"
 #include "sheep.h"
 
 static uint32_t sd_inode_get_vid(struct sd_vdi *sd_vdi,
@@ -40,9 +41,9 @@ static uint32_t sd_inode_get_vid(struct sd_vdi *sd_vdi,
 {
 	uint32_t vid;
 
-	pthread_mutex_lock(&sd_vdi->inode_lock);
-	vid = sd_vdi->inode.data_vdi_id[idx];
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	sd_read_lock(&sd_vdi->lock);
+	vid = sd_vdi->inode->data_vdi_id[idx];
+	sd_rw_unlock(&sd_vdi->lock);
 
 	return vid;
 }
@@ -50,17 +51,9 @@ static uint32_t sd_inode_get_vid(struct sd_vdi *sd_vdi,
 static void sd_inode_invalidate(struct sd_vdi *sd_vdi,
 				bool invalidated)
 {
-	pthread_mutex_lock(&sd_vdi->inode_lock);
+	sd_write_lock(&sd_vdi->lock);
 	sd_vdi->invalidated = invalidated;
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
-}
-
-static void sd_inode_is_snapshot(struct sd_vdi *sd_vdi,
-				 bool snapshot)
-{
-	pthread_mutex_lock(&sd_vdi->inode_lock);
-	sd_vdi->is_snapshot = snapshot;
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	sd_rw_unlock(&sd_vdi->lock);
 }
 
 static void sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
@@ -68,17 +61,19 @@ static void sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
 {
 	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
 		sd_inode_invalidate(sd_vdi, true);
+#if 0
 	else if (sd_io->rsp.result == SD_RES_READONLY)
-		sd_inode_is_snapshot(sd_vdi, true);
+		vdi_is_snapshot(sd_vdi, true);
+#endif
 }
 
 bool sd_inode_needs_reload(struct sd_vdi *sd_vdi)
 {
 	bool needs_reload;
 
-	pthread_mutex_lock(&sd_vdi->inode_lock);
-	needs_reload = sd_vdi->invalidated || sd_vdi->is_snapshot;
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	sd_read_lock(&sd_vdi->lock);
+	needs_reload = sd_vdi->invalidated || vdi_is_snapshot(sd_vdi->inode);
+	sd_rw_unlock(&sd_vdi->lock);
 	return needs_reload;
 }
 
@@ -88,7 +83,7 @@ static inline bool is_data_obj_writable(struct sd_vdi *sd_vdi,
 {
 	bool writable;
 
-	writable = (sd_vdi->vid == sd_vdi->inode.data_vdi_id[idx]);
+	writable = (sd_vdi->vid == sd_vdi->inode->data_vdi_id[idx]);
 
 	return writable;
 }
@@ -110,68 +105,6 @@ static int set_sock_timeout(int fd, unsigned int snd_tmo, unsigned int rcv_tmo)
 
 	return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
 			  (char *)&timeout, sizeof(timeout));
-}
-
-int sd_connect(const char *cluster_host, const char *cluster_port,
-	       unsigned int send_tmo, unsigned int recv_tmo)
-{
-	int sock;
-	struct addrinfo hints;
-	struct addrinfo *ai = NULL;
-	struct addrinfo *rp = NULL;
-	int e;
-
-	memset(&hints,'\0',sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	e = getaddrinfo(cluster_host, cluster_port,
-			&hints, &ai);
-
-	if(e != 0) {
-		ublk_err( "%s: getaddrinfo failed: %s\n",
-			  __func__, gai_strerror(e));
-		freeaddrinfo(ai);
-		return -ENETUNREACH;
-	}
-
-	for(rp = ai; rp != NULL; rp = rp->ai_next) {
-		int ret;
-
-		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-
-		if (sock < 0)
-			continue;	/* error */
-
-		ret = set_sock_timeout(sock, send_tmo, recv_tmo);
-		if (ret < 0) {
-			ublk_err( "%s: failed to set socket timeout",
-				  __func__);
-			close(sock);
-			ret = -errno;
-			rp = NULL;
-			break;
-		}
-		if (connect(sock, rp->ai_addr, rp->ai_addrlen) != -1)
-			break;		/* success */
-
-		close(sock);
-	}
-
-	if (rp == NULL) {
-		ublk_err( "%s: no valid addresses found for %s:%s\n",
-			  __func__, cluster_host, cluster_port);
-		sock = -EHOSTUNREACH;
-		goto err;
-	}
-
-	e = 1;
-	setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &e, sizeof(int));
-err:
-	freeaddrinfo(ai);
-	return sock;
 }
 
 static int sd_result_to_errno(struct sd_io_context *sd_io)
@@ -405,12 +338,12 @@ int sd_read_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi)
 	if (!inode)
 		return -ENOMEM;
 
-	pthread_mutex_lock(&sd_vdi->inode_lock);
+	sd_write_lock(&sd_vdi->lock);
 	snapshot = sd_vdi->is_snapshot;
 	sd_vdi->is_snapshot = false;
 	invalidated = sd_vdi->invalidated;
 	sd_vdi->invalidated = false;
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	sd_write_unlock(&sd_vdi->lock);
 retry:
 	if (snapshot) {
 		ret = sd_vdi_lookup(ctx, sd_vdi->inode.name,
@@ -438,13 +371,13 @@ retry:
 	}
 	if (snapshot || invalidated)
 		goto retry;
-	pthread_mutex_lock(&sd_vdi->inode_lock);
+	sd_read_lock(&sd_vdi->lock);
 	if (ret == 0)
 		memcpy(&sd_vdi->inode, inode, SD_INODE_SIZE);
 	else
 		ublk_err("%s: failed to update inode, error %d\n",
 			 __func__, ret);
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	sd_read_unlock(&sd_vdi->lock);
 	free(inode);
 	return ret;
 }
@@ -517,11 +450,11 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	sd_io->req.flags |= SD_FLAG_CMD_WRITE;
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 
-	pthread_mutex_lock(&sd_vdi->inode_lock);
+	sd_write_lock(&sd_vdi->lock);
 	if (!sd_vdi->inode.data_vdi_id[idx])
 		cleared = true;
 	sd_vdi->inode.data_vdi_id[idx] = new_vid;
-	pthread_mutex_unlock(&sd_vdi->inode_lock);
+	sd_write_unlock(&sd_vdi->lock);
 
 	if (cleared)
 		return 0;
@@ -559,9 +492,9 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
 		sd_io->req.obj.cow_oid = 0;
 		/* Update inode */
-		pthread_mutex_lock(&sd_vdi->inode_lock);
+		sd_write_lock(&sd_vdi->lock);
 		sd_vdi->inode.data_vdi_id[idx] = vid;
-		pthread_mutex_unlock(&sd_vdi->inode_lock);
+		sd_write_unlock(&sd_vdi->lock);
 
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		ublk_err("%s: create new oid %lx from vid %x\n",
@@ -572,9 +505,9 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 		vid = sd_vdi->vid;
 		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
 		/* Update inode */
-		pthread_mutex_lock(&sd_vdi->inode_lock);
+		sd_write_lock(&sd_vdi->lock);
 		sd_vdi->inode.data_vdi_id[idx] = vid;
-		pthread_mutex_unlock(&sd_vdi->inode_lock);
+		sd_write_unlock(&sd_vdi->lock);
 
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_COW;

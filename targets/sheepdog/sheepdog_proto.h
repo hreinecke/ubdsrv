@@ -41,6 +41,7 @@
 #define SD_OP_FLUSH_VDI      0x16 /* obsolete */
 #define SD_OP_DEL_VDI        0x17
 #define SD_OP_GET_CLUSTER_DEFAULT   0x18
+#define SD_OP_CLUSTER_STATUS 0x19
 
 /* macros in the SD_FLAG_CMD_XXX group are mutually exclusive */
 #define SD_FLAG_CMD_WRITE    0x01
@@ -254,6 +255,16 @@ struct sd_rsp {
 			uint8_t		block_size_shift;
 			uint8_t		__pad2;
 		} cluster_default;
+		struct {
+			uint8_t		proto_ver;
+			uint8_t		copy_policy;
+			uint16_t	nr_nodes;
+			uint32_t	epoch;
+			uint64_t	ctime;
+			uint16_t	flags;
+			uint8_t 	nr_copies;
+			uint8_t		block_size_shift;
+		} cluster;
 
 		uint32_t		__pad[8];
 	};
@@ -336,7 +347,7 @@ struct recovery_throttling {
 #define SD_UUID_POLICY_MASK 0x80
 #define SD_STORE_POLICY_MASK 0x7f
 
-struct sd_inode {
+struct sd_inode_header {
 	char name[SD_MAX_VDI_LEN];
 	char tag[SD_MAX_VDI_TAG_LEN];
 	uint64_t create_time;
@@ -351,6 +362,10 @@ struct sd_inode {
 	uint32_t snap_id;
 	uint32_t vdi_id;
 	uint32_t parent_vdi_id;
+};
+
+struct sd_inode {
+	struct sd_inode_header header;
 
 	uint32_t btree_counter;
 	uint32_t __unused[OLD_MAX_CHILDREN - 1];
@@ -372,7 +387,7 @@ struct sd_indirect_idx {
 #define SD_INODE_STORE_POLICY(i) ((i)->store_policy & SD_STORE_POLICY_MASK)
 #define SD_INODE_USE_UUID(i) ((i)->store_policy & SD_UUID_POLICY_MASK)
 
-static inline bool sd_store_policy_is_hyper(const struct sd_inode *inode)
+static inline bool sd_store_policy_is_hyper(const struct sd_inode_header *inode)
 {
 	uint8_t policy = inode->store_policy & SD_STORE_POLICY_MASK;
 	return policy == SD_HYPER_STORE_POLICY;
@@ -389,6 +404,12 @@ struct sd_index_header {
 #define	BTREE_HEAD         1
 #define	BTREE_INDEX        2
 #define BTREE_INDIRECT_IDX 4
+
+typedef int (*write_node_fn)(uint64_t id, void *mem, unsigned int len,
+				uint64_t offset, uint32_t flags, int copies,
+				int copy_policy, bool create, bool direct);
+typedef int (*read_node_fn)(uint64_t id, void **mem, unsigned int len,
+				uint64_t offset);
 
 struct sheepdog_vdi_attr {
 	char name[SD_MAX_VDI_LEN];
@@ -575,7 +596,7 @@ static inline uint64_t vid_to_vmstate_oid(uint32_t vid, uint32_t idx)
 	return VMSTATE_BIT | ((uint64_t)vid << VDI_SPACE_SHIFT) | idx;
 }
 
-static inline bool vdi_is_snapshot(const struct sd_inode *inode)
+static inline bool vdi_is_snapshot(const struct sd_inode_header *inode)
 {
 	return !!inode->snap_ctime;
 }

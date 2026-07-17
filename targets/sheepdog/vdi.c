@@ -11,6 +11,14 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <config.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include "ublksrv.h"
+#include "ublksrv_utils.h"
+
+#include "sheepdog_proto.h"
 #include "sheepdog.h"
 #include "internal.h"
 #include "sheep.h"
@@ -119,7 +127,7 @@ void free_request(struct sd_request *req)
 }
 
 struct sd_request *alloc_request(struct sd_cluster *c,
-	void *data, size_t count, uint8_t op)
+	void *data, size_t count, enum sheep_request_type op)
 {
 	struct sd_request *req;
 	int fd;
@@ -140,15 +148,30 @@ struct sd_request *alloc_request(struct sd_cluster *c,
 	return req;
 }
 
-int sd_vdi_read(struct sd_cluster *c, struct sd_vdi *vdi,
+int init_request(struct sd_cluster *c, struct sd_request *req,
+		  void *data, size_t count, enum sheep_request_type op)
+{
+	req->fd = eventfd(0, 0);
+	if (fd < 0) {
+		return SD_RES_SYSTEM_ERROR;
+	}
+	req->efd = fd;
+	req->cluster = c;
+	req->data = data;
+	req->length = count;
+	req->opcode = op;
+	INIT_LIST_NODE(&req->list);
+	return 0;
+}
+
+int sd_vdi_read(struct sd_cluster *c, struct sd_request *req,
 			void *buf, size_t count, off_t offset)
 {
-	struct sd_request *req = alloc_request(c, buf,
-					count, VDI_READ);
 	int ret;
 
-	if (!req)
-		return errno;
+	ret = init_request(c, req, buf, count, VDI_READ);
+	if (ret)
+		return ret;
 
 	req->vdi = vdi;
 	req->offset = offset;
@@ -156,20 +179,20 @@ int sd_vdi_read(struct sd_cluster *c, struct sd_vdi *vdi,
 
 	eventfd_xread(req->efd);
 	ret = req->ret;
-	free_request(req);
+	close(req->efd);
+	req->efd = -1;
 
 	return ret;
 }
 
-int sd_vdi_write(struct sd_cluster *c, struct sd_vdi *vdi, void *buf,
+int sd_vdi_write(struct sd_cluster *c, struct sd_request *req, void *buf,
 			size_t count, off_t offset)
 {
-	struct sd_request *req = alloc_request(c, buf,
-					count, VDI_WRITE);
 	int ret;
 
-	if (!req)
-		return errno;
+	ret = init_request(c, req, buf, count, VDI_WRITE);
+	if (ret)
+		return ret;
 
 	req->vdi = vdi;
 	req->offset = offset;
@@ -177,7 +200,29 @@ int sd_vdi_write(struct sd_cluster *c, struct sd_vdi *vdi, void *buf,
 
 	eventfd_xread(req->efd);
 	ret = req->ret;
-	free_request(req);
+	close(req->efd);
+	req->efd = -1;
+
+	return ret;
+}
+
+int sd_vdi_discard(struct sd_cluster *c, struct sd_request *ret, void *buf,
+		   size_t count, off_t offset)
+{
+	int ret;
+
+	ret = init_request(c, req, buf, count, VDI_DISCARD);
+	if (ret)
+		return ret;
+
+	req->vdi = vdi;
+	req->offset = offset;
+	queue_request(req);
+
+	eventfd_xread(req->efd);
+	ret = req->ret;
+	close(req->efd);
+	req->efd = -1;
 
 	return ret;
 }
@@ -188,7 +233,7 @@ int sd_vdi_close(struct sd_cluster *c, struct sd_vdi *vdi)
 
 	ret = unlock_vdi(c, vdi);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "failed to unlock %s\n", vdi->name);
+		ublk_err("%s: failed to unlock %s\n", __func__, vdi->name);
 		return ret;
 	}
 	free_vdi(vdi);
@@ -270,7 +315,7 @@ static int read_object(struct sd_cluster *c, uint64_t oid, void *data,
 }
 
 static int find_vdi(struct sd_cluster *c, char *name,
-		char *tag, uint32_t *vid)
+		    char *tag, uint32_t *vid)
 {
 	struct sd_req hdr = {};
 	struct sd_rsp *rsp = (struct sd_rsp *)&hdr;
@@ -282,7 +327,11 @@ static int find_vdi(struct sd_cluster *c, char *name,
 	if (tag)
 		pstrcpy(buf + SD_MAX_VDI_LEN, SD_MAX_VDI_TAG_LEN, tag);
 
-	sd_init_req(&hdr, SD_OP_GET_VDI_INFO);
+	if (c->shared) {
+		sd_init_req(&hdr, SD_OP_LOCK_VDI);
+		hdr.vdi.type = LOCK_TYPE_SHARED;
+	} else
+		sd_init_req(&hdr, SD_OP_GET_VDI_INFO);
 	hdr.data_length = SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN;
 	hdr.flags = SD_FLAG_CMD_WRITE;
 
@@ -313,7 +362,7 @@ static int vdi_read_inode_header(struct sd_cluster *c, char *name,
 }
 
 static int vdi_read_inode(struct sd_cluster *c, char *name,
-		char *tag, struct sd_inode *inode)
+			  char *tag, struct sd_inode *inode, bool locked)
 {
 	int ret;
 	uint32_t vid = 0;
@@ -335,17 +384,17 @@ int sd_vdi_snapshot(struct sd_cluster *c, char *name, char *snap_tag)
 	int ret = 0;
 
 	if (!name || *name == '\0') {
-		fprintf(stderr, "VDI name can NOT be null\n");
+		ublk_err("%s: VDI name can NOT be null\n");
 		return SD_RES_INVALID_PARMS;
 	}
 	if (!snap_tag || *snap_tag == '\0') {
-		fprintf(stderr, "Snapshot tag can NOT be null for snapshot\n");
+		ublk_err("%s: Snapshot tag can NOT be null for snapshot\n");
 		return SD_RES_INVALID_PARMS;
 	}
 
 	ret = find_vdi(c, name, snap_tag, NULL);
 	if (ret == SD_RES_SUCCESS) {
-			fprintf(stderr, "VDI %s(tag: %s) is already existed\n",
+			ublk_err("%s: VDI %s(tag: %s) is already existed\n",
 				name, snap_tag);
 			return SD_RES_INVALID_PARMS;
 
@@ -355,13 +404,13 @@ int sd_vdi_snapshot(struct sd_cluster *c, char *name, char *snap_tag)
 			return ret;
 
 	} else {
-		fprintf(stderr, "Failed to create snapshot:%s\n",
-				sd_strerror(ret));
+		ublk_err("%s: Failed to create snapshot:%s\n",
+			 __func__, sd_strerror(ret));
 		return ret;
 	}
 
 	if (sd_store_policy_is_hyper(&inode)) {
-		fprintf(stderr, "Creating a snapshot of hypervolume"
+		ublk_err("%s: Creating a snapshot of hypervolume"
 				" is not supported\n");
 		return SD_RES_INVALID_PARMS;
 	}
@@ -372,7 +421,7 @@ int sd_vdi_snapshot(struct sd_cluster *c, char *name, char *snap_tag)
 			   inode.nr_copies, inode.copy_policy,
 			   false, false);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to write object: %s\n",
+		ublk_err("%s: Failed to write object: %s\n",
 				sd_strerror(ret));
 		goto out;
 	}
@@ -382,7 +431,7 @@ int sd_vdi_snapshot(struct sd_cluster *c, char *name, char *snap_tag)
 			    inode.copy_policy, inode.store_policy,
 			    inode.block_size_shift);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to create VDI: %s\n", sd_strerror(ret));
+		ublk_err("%s: Failed to create VDI: %s\n", sd_strerror(ret));
 		goto out;
 	}
 
@@ -397,27 +446,27 @@ int sd_vdi_create(struct sd_cluster *c, char *name, uint64_t size)
 	int ret;
 
 	if (size > SD_MAX_VDI_SIZE) {
-		fprintf(stderr, "VDI size is too large\n");
+		ublk_err("%s: VDI size is too large\n");
 		return SD_RES_INVALID_PARMS;
 	} else if (size == 0) {
-		fprintf(stderr, "VDI size can NOT be ZERO\n");
+		ublk_err("%s: VDI size can NOT be ZERO\n");
 		return SD_RES_INVALID_PARMS;
 	}
 
 	if (!name || *name == '\0') {
-		fprintf(stderr, "VDI name can NOT be null\n");
+		ublk_err("%s: VDI name can NOT be null\n");
 		return SD_RES_INVALID_PARMS;
 	}
 
 	sd_init_req(&req, SD_OP_CLUSTER_STATUS);
 	ret = sd_run_sdreq(c, &req, NULL);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to get cluster info: %s\n",
+		ublk_err("%s: Failed to get cluster info: %s\n",
 				sd_strerror(ret));
 		return ret;
 	}
 	if (!rsp->cluster.ctime) {
-		fprintf(stderr, "%s\n", sd_strerror(SD_RES_WAIT_FOR_FORMAT));
+		ublk_err("%s: %s\n", sd_strerror(SD_RES_WAIT_FOR_FORMAT));
 		return SD_RES_WAIT_FOR_FORMAT;
 	}
 
@@ -431,7 +480,7 @@ int sd_vdi_create(struct sd_cluster *c, char *name, uint64_t size)
 			    rsp->cluster.copy_policy, store_policy,
 			    SD_DEFAULT_BLOCK_SIZE_SHIFT);
 	if (ret != SD_RES_SUCCESS)
-		fprintf(stderr, "Failed to create VDI %s: %s\n",
+		ublk_err("%s: Failed to create VDI %s: %s\n",
 				name, sd_strerror(ret));
 
 	return ret;
@@ -445,17 +494,17 @@ int sd_vdi_clone(struct sd_cluster *c, char *srcname,
 
 	if (!srcname || *srcname == '\0') {
 		ret = SD_RES_INVALID_PARMS;
-		fprintf(stderr, "VDI name can NOT  be null\n");
+		ublk_err("%s: VDI name can NOT  be null\n");
 		goto out;
 	}
 	if (!dstname || *dstname == '\0') {
 		ret = SD_RES_INVALID_PARMS;
-		fprintf(stderr, "Destination VDI name can NOT  be null\n");
+		ublk_err("%s: Destination VDI name can NOT  be null\n");
 		goto out;
 	}
 	if (!srctag || *srctag == '\0') {
 		ret = SD_RES_INVALID_PARMS;
-		fprintf(stderr, "Snapshot tag can NOT be null when clone\n");
+		ublk_err("%s: Snapshot tag can NOT be null when clone\n");
 		goto out;
 	}
 
@@ -470,7 +519,7 @@ int sd_vdi_clone(struct sd_cluster *c, char *srcname,
 			    inode->header.store_policy,
 			    inode->header.block_size_shift);
 	if (ret != SD_RES_SUCCESS)
-		fprintf(stderr, "Clone VDI failed: %s\n", sd_strerror(ret));
+		ublk_err("%s: Clone VDI failed: %s\n", sd_strerror(ret));
 
 out:
 	free(inode);
@@ -489,13 +538,13 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 
 	if (!name || *name == '\0') {
 		ret = SD_RES_INVALID_PARMS;
-		fprintf(stderr, "VDI name can NOT be null\n");
+		ublk_err("%s: VDI name can NOT be null\n");
 		goto out;
 	}
 
 	ret = find_vdi(c, name, tag, &vid);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Maybe VDI %s(tag: %s) does NOT exist: %s\n",
+		ublk_err("%s: Maybe VDI %s(tag: %s) does NOT exist: %s\n",
 				name, tag, sd_strerror(ret));
 		goto out;
 	}
@@ -504,7 +553,7 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 	hdr.obj.oid = vid_to_vdi_oid(vid);
 	ret = sd_run_sdreq(c, &hdr, NULL);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to delete cache :%s\n",
+		ublk_err("%s: Failed to delete cache :%s\n",
 				sd_strerror(ret));
 		goto out;
 	}
@@ -512,7 +561,7 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 	inode = xmalloc(sizeof(*inode));
 	ret = vdi_read_inode(c, name, tag, inode);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to read inode : %s\n",
+		ublk_err("%s: Failed to read inode : %s\n",
 				sd_strerror(ret));
 		goto out;
 	}
@@ -542,8 +591,8 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 				   inode->header.copy_policy,
 				   false, true);
 		if (ret != SD_RES_SUCCESS) {
-			fprintf(stderr,
-				"failed to update inode for discarding\n");
+			ublk_err("%s: failed to update inode for discard\n",
+				__func__);
 			goto out;
 		}
 	}
@@ -558,8 +607,8 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 
 	ret = sd_run_sdreq(c, &hdr, data);
 	if (ret != SD_RES_SUCCESS)
-		fprintf(stderr, "Failed to delete %s: %s\n",
-				name, sd_strerror(ret));
+		ublk_err("%s: Failed to delete %s: %s\n",
+			 __func__, name, sd_strerror(ret));
 
 out:
 	free(inode);
@@ -572,38 +621,40 @@ int sd_vdi_rollback(struct sd_cluster *c, char *name, char *tag)
 	struct sd_inode_header inode;
 
 	if (!tag || *tag == '\0') {
-		fprintf(stderr, "Snapshot tag can NOT be null for rollback\n");
+		ublk_err("%s: Snapshot tag can NOT be null for rollback\n"
+			__func__);
 		return SD_RES_INVALID_PARMS;
 	}
 	if (!name || *name == '\0') {
-		fprintf(stderr, "VDI name can NOT be null\n");
+		ublk_err("%s: VDI name can NOT be null\n", __func__);
 		return SD_RES_INVALID_PARMS;
 	}
 
 	ret = find_vdi(c, name, NULL, NULL);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Working VDI %s does NOT exist\n", name);
+		ublk_err("%s: Working VDI %s does NOT exist\n",
+			 __func__, name);
 		return SD_RES_INVALID_PARMS;
 	}
 
 	ret = find_vdi(c, name, tag, NULL);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Snapshot VDI %s(tag: %s) does NOT exist\n",
-				name, tag);
+		ublk_err("%s: Snapshot VDI %s(tag: %s) does NOT exist\n",
+			 __func__, name, tag);
 		return SD_RES_INVALID_PARMS;
 	}
 
 	ret = vdi_read_inode_header(c, name, tag, &inode);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Read inode for VDI %s failed: %s\n",
-				name, sd_strerror(ret));
+		ublk_err("%s: Read inode for VDI %s failed: %s\n",
+			 __func__, name, sd_strerror(ret));
 		return ret;
 	}
 
 	ret = sd_vdi_delete(c, name, NULL);
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to delete current VDI state: %s\n",
-				sd_strerror(ret));
+		ublk_err("%s: Failed to delete current VDI state: %s\n",
+			 __func__, sd_strerror(ret));
 		return ret;
 	}
 
@@ -612,8 +663,8 @@ int sd_vdi_rollback(struct sd_cluster *c, char *name, char *tag)
 			inode.store_policy, inode.block_size_shift);
 
 	if (ret != SD_RES_SUCCESS) {
-		fprintf(stderr, "Failed to rollback VDI: %s\n",
-				sd_strerror(ret));
+		ublk_err("%s: Failed to rollback VDI: %s\n",
+			 __func__, sd_strerror(ret));
 		return ret;
 	}
 

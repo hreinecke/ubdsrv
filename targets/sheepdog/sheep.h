@@ -14,20 +14,6 @@ extern "C" {
 #define SD_SEND_TMO 5
 #define SD_RECV_TMO 60
 
-struct sd_vdi {
-	char vdi_name[256];
-	uint32_t vid;
-	pthread_mutex_t inode_lock;
-	struct sd_inode inode;
-	bool invalidated;
-	bool is_snapshot;
-};
-
-struct sd_queue_ctx {
-	int fd;
-	unsigned long timeout;
-};
-
 enum sd_io_state {
 	SD_SEND_REQ,
 	SD_SEND_DATA,
@@ -42,10 +28,8 @@ struct sd_io_context {
 	void *addr;
 };
 
-#define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode.block_size_shift)
+#define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode->header.block_size_shift)
 
- int sd_connect(const char *cluster_host, const char *cluster_port,
-		unsigned int send_tmo, unsigned int recv_tmo);
 int sd_vdi_lookup(struct sd_queue_ctx *ctx, const char *vdi_name,
 		uint32_t snapid, const char *tag, uint32_t *vid, bool lock);
 int sd_vdi_release(struct sd_queue_ctx *ctx, struct sd_vdi *vdi);

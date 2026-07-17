@@ -42,6 +42,7 @@ struct sd_cluster {
 	struct sd_rw_lock inflight_lock;
 	struct sd_rw_lock blocking_lock;
 	struct sd_mutex submit_mutex;
+	bool shared;
 };
 
 struct sd_vdi {
@@ -49,6 +50,31 @@ struct sd_vdi {
 	uint32_t vid;
 	struct sd_rw_lock lock;
 	char *name;
+	bool invalidated;
+};
+
+enum sheep_request_type {
+	VDI_READ = 1,
+	VDI_WRITE,
+	VDI_CREATE,
+	VDI_DISCARD,
+	SHEEP_CTL,
+};
+
+struct sd_request {
+	struct sd_cluster *cluster;
+	struct list_node list;
+	union {
+		struct sd_vdi *vdi;
+		struct sd_req *hdr;
+	};
+	uint32_t tag;
+	void *data;
+	size_t length;
+	off_t offset;
+	enum sheep_request_type opcode;
+	int efd;
+	int ret;
 };
 
 /*
@@ -102,21 +128,34 @@ struct sd_vdi *sd_vdi_open(struct sd_cluster *c, char *name);
  *
  * Return error code defined in sheepdog_proto.h.
  */
-int sd_vdi_read(struct sd_cluster *c, struct sd_vdi *vdi, void *buf,
+int sd_vdi_read(struct sd_cluster *c, struct sd_request *req, void *buf,
 		size_t count, off_t offset);
 
 /*
  * Write to a vdi descriptor at a given offset.
  *
- * @vdi: pointer to the vdi descriptor.
+ * @req: pointer to the request.
  * @buf: the buffer to hold the data.
  * @count: how many bytes we write up to.
  * @offset: the start of the vdi we try to write.
  *
  * Return error code defined in sheepdog_proto.h.
  */
-int sd_vdi_write(struct sd_cluster *c, struct sd_vdi *vdi, void *buf,
+int sd_vdi_write(struct sd_cluster *c, struct sd_request *req, void *buf,
 		size_t count, off_t offset);
+
+/*
+ * Discard data on a vdi descriptor at a given offset.
+ *
+ * @req: pointer to the vdi descriptor.
+ * @buf: the buffer to hold the data.
+ * @count: how many bytes we write up to.
+ * @offset: the start of the vdi we try to write.
+ *
+ * Return error code defined in sheepdog_proto.h.
+ */
+int sd_vdi_discard(struct sd_cluster *c, struct sd_request *req, void *buf,
+		   size_t count, off_t offset);
 
 /*
  * Close a vdi descriptor.
