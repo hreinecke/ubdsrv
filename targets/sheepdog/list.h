@@ -78,24 +78,24 @@ static inline bool list_linked(const struct list_node *node)
 	     !list_entry_is_head(pos, head, member);			\
 	     pos = n, n = list_next_entry(n, member))
 
-static inline void __list_add(struct list_node *new,
+static inline void __list_add(struct list_node *node,
 			      struct list_node *prev,
 			      struct list_node *next)
 {
-	next->prev = new;
-	new->next = next;
-	new->prev = prev;
-	prev->next = new;
+	next->prev = node;
+	node->next = next;
+	node->prev = prev;
+	prev->next = node;
 }
 
-static inline void list_add(struct list_node *new, struct list_head *head)
+static inline void list_add(struct list_node *node, struct list_head *head)
 {
-	__list_add(new, &head->n, head->n.next);
+	__list_add(node, &head->n, head->n.next);
 }
 
-static inline void list_add_tail(struct list_node *new, struct list_head *head)
+static inline void list_add_tail(struct list_node *node, struct list_head *head)
 {
-	__list_add(new, head->n.prev, &head->n);
+	__list_add(node, head->n.prev, &head->n);
 }
 
 static inline void __list_del(struct list_node *prev, struct list_node *next)
@@ -204,8 +204,8 @@ static inline void __hlist_del(struct hlist_node *n)
 static inline void hlist_del(struct hlist_node *n)
 {
 	__hlist_del(n);
-	n->next = LIST_POISON1;
-	n->pprev = LIST_POISON2;
+	n->next = (struct hlist_node *)LIST_POISON1;
+	n->pprev = (struct hlist_node **)LIST_POISON2;
 }
 
 static inline void hlist_add_head(struct hlist_node *n, struct hlist_head *h)
