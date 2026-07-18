@@ -79,8 +79,10 @@ static void aio_rw_done(struct sheep_aiocb *aiocb)
 
 static struct sheep_aiocb *sheep_aiocb_setup(struct sd_request *req)
 {
-	struct sheep_aiocb *aiocb = xmalloc(sizeof(*aiocb));
+	struct sheep_aiocb *aiocb = malloc(sizeof(*aiocb));
 
+	if (!aiocb)
+		return NULL;
 	aiocb->offset = req->offset;
 	aiocb->length = req->length;
 	aiocb->ret = 0;
@@ -401,12 +403,17 @@ static int init_cluster_handlers(struct sd_cluster *c)
 
 struct sd_cluster *sd_connect(char *host)
 {
-	char *ip, *pt, *h = xstrdup(host);
+	char *ip, *pt, *h = strdup(host);
 	unsigned port;
 	struct sockaddr_in addr;
 	struct linger linger_opt = {1, 0};
 	int fd, ret, value = 1;
 	struct sd_cluster *c;
+
+	if (!h) {
+		errno = SD_RES_NO_MEM;
+		goto err;
+	}
 
 	ip = strtok(h, ":");
 	if (!ip) {

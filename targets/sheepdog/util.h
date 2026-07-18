@@ -53,25 +53,6 @@ extern "C" {
 
 #define uninitialized_var(x) x = x
 
-#ifndef NO_SHEEPDOG_LOGGER
-
-#include "logger.h"
-#define panic(fmt, args...)			\
-({						\
-	sd_emerg("PANIC: " fmt, ##args);	\
-	abort();				\
-})
-
-#else
-
-#define panic(fmt, args...)			\
-({						\
-	fprintf(stderr, "PANIC: " fmt, ##args);	\
-	abort();				\
-})
-
-#endif
-
 static inline int before(uint32_t seq1, uint32_t seq2)
 {
 	return (int32_t)(seq1 - seq2) < 0;
@@ -113,7 +94,6 @@ static inline void *zalloc(size_t size)
 	_x < _y ? -1 : _x > _y ? 1 : 0;	\
 })
 
-void *xmalloc(size_t size);
 void *xzalloc(size_t size);
 void *xrealloc(void *ptr, size_t size);
 void *xcalloc(size_t nmemb, size_t size);
@@ -124,7 +104,6 @@ ssize_t xwrite(int fd, const void *buf, size_t len);
 ssize_t xpread(int fd, void *buf, size_t count, off_t offset);
 ssize_t xpwrite(int fd, const void *buf, size_t count, off_t offset);
 int xmkdir(const char *pathname, mode_t mode);
-int xfallocate(int fd, int mode, off_t offset, off_t len);
 int xftruncate(int fd, off_t length);
 int eventfd_xread(int efd);
 void eventfd_xwrite(int efd, int value);
@@ -299,7 +278,7 @@ struct sd_mutex {
 	pthread_mutex_t mutex;
 };
 
-static inline void sd_init_mutex(struct sd_mutex *mutex)
+static inline int sd_init_mutex(struct sd_mutex *mutex)
 {
 	int ret;
 
@@ -307,11 +286,10 @@ static inline void sd_init_mutex(struct sd_mutex *mutex)
 		ret = pthread_mutex_init(&mutex->mutex, NULL);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to initialize a lock, %s", strerror(ret));
+	return ret;
 }
 
-static inline void sd_init_mutex_attr(struct sd_mutex *mutex,
+static inline int sd_init_mutex_attr(struct sd_mutex *mutex,
 				      pthread_mutexattr_t *attr)
 {
 	int ret;
@@ -320,12 +298,10 @@ static inline void sd_init_mutex_attr(struct sd_mutex *mutex,
 		ret = pthread_mutex_init(&mutex->mutex, attr);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to initialize a lock with attr, %s",
-		      strerror(ret));
+	return ret;
 }
 
-static inline void sd_destroy_mutex(struct sd_mutex *mutex)
+static inline int sd_destroy_mutex(struct sd_mutex *mutex)
 {
 	int ret;
 
@@ -333,11 +309,10 @@ static inline void sd_destroy_mutex(struct sd_mutex *mutex)
 		ret = pthread_mutex_destroy(&mutex->mutex);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to destroy a lock, %s", strerror(ret));
+	return ret;
 }
 
-static inline void sd_mutex_lock(struct sd_mutex *mutex)
+static inline int sd_mutex_lock(struct sd_mutex *mutex)
 {
 	int ret;
 
@@ -345,8 +320,7 @@ static inline void sd_mutex_lock(struct sd_mutex *mutex)
 		ret = pthread_mutex_lock(&mutex->mutex);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to lock for reading, %s", strerror(ret));
+	return ret;
 }
 
 static inline int sd_mutex_trylock(struct sd_mutex *mutex)
@@ -354,7 +328,7 @@ static inline int sd_mutex_trylock(struct sd_mutex *mutex)
 	return pthread_mutex_trylock(&mutex->mutex);
 }
 
-static inline void sd_mutex_unlock(struct sd_mutex *mutex)
+static inline int sd_mutex_unlock(struct sd_mutex *mutex)
 {
 	int ret;
 
@@ -362,8 +336,7 @@ static inline void sd_mutex_unlock(struct sd_mutex *mutex)
 		ret = pthread_mutex_unlock(&mutex->mutex);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to unlock, %s", strerror(ret));
+	return ret;
 }
 
 /* wrapper for pthread_cond */
@@ -374,7 +347,7 @@ struct sd_cond {
 	pthread_cond_t cond;
 };
 
-static inline void sd_cond_init(struct sd_cond *cond)
+static inline int sd_cond_init(struct sd_cond *cond)
 {
 	int ret;
 
@@ -382,12 +355,10 @@ static inline void sd_cond_init(struct sd_cond *cond)
 		ret = pthread_cond_init(&cond->cond, NULL);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to initialize a lock, %s", strerror(ret));
-
+	return ret;
 }
 
-static inline void sd_destroy_cond(struct sd_cond *cond)
+static inline int sd_destroy_cond(struct sd_cond *cond)
 {
 	int ret;
 
@@ -395,8 +366,7 @@ static inline void sd_destroy_cond(struct sd_cond *cond)
 		ret = pthread_cond_destroy(&cond->cond);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to destroy a lock, %s", strerror(ret));
+	return ret;
 }
 
 static inline int sd_cond_signal(struct sd_cond *cond)
@@ -431,7 +401,7 @@ struct sd_rw_lock {
 	pthread_rwlock_t rwlock;
 };
 
-static inline void sd_init_rw_lock(struct sd_rw_lock *lock)
+static inline int sd_init_rw_lock(struct sd_rw_lock *lock)
 {
 	int ret;
 
@@ -439,11 +409,10 @@ static inline void sd_init_rw_lock(struct sd_rw_lock *lock)
 		ret = pthread_rwlock_init(&lock->rwlock, NULL);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to initialize a lock, %s", strerror(ret));
+	return ret;
 }
 
-static inline void sd_destroy_rw_lock(struct sd_rw_lock *lock)
+static inline int sd_destroy_rw_lock(struct sd_rw_lock *lock)
 {
 	int ret;
 
@@ -451,11 +420,10 @@ static inline void sd_destroy_rw_lock(struct sd_rw_lock *lock)
 		ret = pthread_rwlock_destroy(&lock->rwlock);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to destroy a lock, %s", strerror(ret));
+	return ret;
 }
 
-static inline void sd_read_lock(struct sd_rw_lock *lock)
+static inline int sd_read_lock(struct sd_rw_lock *lock)
 {
 	int ret;
 
@@ -463,15 +431,14 @@ static inline void sd_read_lock(struct sd_rw_lock *lock)
 		ret = pthread_rwlock_rdlock(&lock->rwlock);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to lock for reading, %s", strerror(ret));
+	return ret;
 }
 
 /*
  * Even though POSIX manual it doesn't return EAGAIN, we indeed have met the
  * case that it returned EAGAIN
  */
-static inline void sd_write_lock(struct sd_rw_lock *lock)
+static inline int sd_write_lock(struct sd_rw_lock *lock)
 {
 	int ret;
 
@@ -479,11 +446,10 @@ static inline void sd_write_lock(struct sd_rw_lock *lock)
 		ret = pthread_rwlock_wrlock(&lock->rwlock);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to lock for writing, %s", strerror(ret));
+	return ret;
 }
 
-static inline void sd_rw_unlock(struct sd_rw_lock *lock)
+static inline int sd_rw_unlock(struct sd_rw_lock *lock)
 {
 	int ret;
 
@@ -491,8 +457,7 @@ static inline void sd_rw_unlock(struct sd_rw_lock *lock)
 		ret = pthread_rwlock_unlock(&lock->rwlock);
 	} while (ret == EAGAIN);
 
-	if (unlikely(ret != 0))
-		panic("failed to unlock, %s", strerror(ret));
+	return ret;
 }
 
 /* colors */
@@ -571,7 +536,6 @@ static inline uint64_t clock_get_time(void)
 	return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
 }
 
-char *xstrdup(const char *s);
 uint32_t str_to_u32(const char *nptr);
 uint16_t str_to_u16(const char *nptr);
 

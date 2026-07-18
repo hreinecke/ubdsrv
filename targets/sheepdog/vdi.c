@@ -60,7 +60,11 @@ static struct sd_vdi *alloc_vdi(struct sd_cluster *c, char *name)
 	struct sd_vdi *new = xzalloc(sizeof(*new));
 
 	new->name = name;
-	new->inode = xmalloc(sizeof(struct sd_inode));
+	new->inode = malloc(sizeof(struct sd_inode));
+	if (!new->inode) {
+		free(new);
+		return NULL;
+	}
 	sd_init_rw_lock(&new->lock);
 
 	return new;
@@ -506,7 +510,11 @@ int sd_vdi_clone(struct sd_cluster *c, char *srcname,
 		goto out;
 	}
 
-	inode = xmalloc(sizeof(struct sd_inode));
+	inode = malloc(sizeof(struct sd_inode));
+	if (!inode) {
+		ret = SD_RES_NO_MEM;
+		goto out;
+	}
 	ret = vdi_read_inode(c, srcname, srctag, inode);
 	if (ret != SD_RES_SUCCESS)
 		goto out;
@@ -547,7 +555,11 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 		goto out;
 	}
 
-	inode = xmalloc(sizeof(*inode));
+	inode = malloc(sizeof(*inode));
+	if (!inode) {
+		ret = SD_RES_NO_MEM;
+		goto out;
+	}
 	ret = vdi_read_inode(c, name, tag, inode);
 	if (ret != SD_RES_SUCCESS) {
 		ublk_err("%s: Failed to read inode : %s\n",

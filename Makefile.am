@@ -61,7 +61,7 @@ ublk_nvme_vfio_CFLAGS = $(ublk_CFLAGS)
 ublk_nvme_vfio_CPPFLAGS = $(ublk_CPPFLAGS)
 ublk_nvme_vfio_LDADD = $(ublk_LDADD)
 
-ublk_sheepdog_SOURCES = $(TGT_DIR)/sheepdog/ublk.sheepdog.cpp $(TGT_DIR)/sheepdog/ops.c $(TGT_DIR)/sheepdog/sheep_lib.c $(TGT_DIR)/sheepdog/vdi.c $(TGT_DIR)/ublksrv_tgt.cpp
+ublk_sheepdog_SOURCES = $(TGT_DIR)/sheepdog/ublk.sheepdog.cpp $(TGT_DIR)/sheepdog/ops.c $(TGT_DIR)/sheepdog/sheep_lib.c $(TGT_DIR)/sheepdog/vdi.c $(TGT_DIR)/ublksrv_tgt.cpp $(TGT_DIR)/sheepdog/util.c
 ublk_sheepdog_CFLAGS = $(ublk_CFLAGS)
 ublk_sheepdog_CPPFLAGS = $(ublk_CPPFLAGS)
 ublk_sheepdog_LDADD = $(ublk_LDADD)

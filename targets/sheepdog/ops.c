@@ -111,7 +111,9 @@ static int vdi_create_response(struct sheep_request *req, struct sd_rsp *rsp)
 	vdi = req->aiocb->request->vdi;
 
 	/* We need to update inode for create */
-	new = xmalloc(sizeof(*new));
+	new = malloc(sizeof(*new));
+	if (!new)
+		return SD_RES_NO_MEM;
 	vid = vdi->vid;
 	oid = vid_to_vdi_oid(vid);
 	idx = data_oid_to_idx(req->oid);

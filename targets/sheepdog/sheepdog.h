@@ -14,8 +14,8 @@
 #ifndef SHEEPDOG_H_
 #define SHEEPDOG_H_
 
-#ifndef NO_SHEEPDOG_LOGGER
-# define NO_SHEEPDOG_LOGGER
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 #include "sheepdog_proto.h"
@@ -224,4 +224,7 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag);
  */
 int sd_vdi_rollback(struct sd_cluster *c, char *name, char *tag);
 
+#ifdef __cplusplus
+}
+#endif
 #endif
