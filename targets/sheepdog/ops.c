@@ -143,8 +143,10 @@ static int sheep_ctl_request(struct sheep_aiocb *aiocb)
 {
 	struct sd_req *hdr = aiocb->request->hdr;
 	struct sd_cluster *c = aiocb->request->cluster;
-	struct sheep_request *request = xzalloc(sizeof(struct sheep_request));
+	struct sheep_request *request = calloc(1, sizeof(struct sheep_request));
 
+	if (!request)
+		return SD_RES_NO_MEM;
 	INIT_LIST_NODE(&request->list);
 	request->offset = hdr->obj.offset;
 	request->length = hdr->data_length;

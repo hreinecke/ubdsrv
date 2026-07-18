@@ -99,9 +99,11 @@ struct sheep_request *alloc_sheep_request(struct sheep_aiocb *aiocb,
 						 uint64_t oid, uint64_t cow_oid,
 						 int len, int offset)
 {
-	struct sheep_request *req = xzalloc(sizeof(*req));
+	struct sheep_request *req = calloc(1, sizeof(*req));
 	struct sd_cluster *c = aiocb->request->cluster;
 
+	if (!req)
+		return NULL;
 	req->offset = offset;
 	req->length = len;
 	req->oid = oid;
@@ -468,7 +470,11 @@ struct sd_cluster *sd_connect(char *host)
 		goto err_close;
 	}
 
-	c = xzalloc(sizeof(*c));
+	c = calloc(1, sizeof(*c));
+	if (!c) {
+		errno = SD_RES_NO_MEM;
+		goto err_close;
+	}
 	c->sockfd = fd;
 	c->port = port;
 	memcpy(c->addr, &addr.sin_addr, sizeof(addr.sin_addr));

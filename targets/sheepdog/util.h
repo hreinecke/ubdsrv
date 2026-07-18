@@ -75,11 +75,6 @@ static inline int after(uint32_t seq1, uint32_t seq2)
 	(void) (&_x == &_y);		\
 	_x > _y ? _x : _y; })
 
-static inline void *zalloc(size_t size)
-{
-	return calloc(1, size);
-}
-
 /*
  * Compares two integer values
  *
@@ -94,115 +89,16 @@ static inline void *zalloc(size_t size)
 	_x < _y ? -1 : _x > _y ? 1 : 0;	\
 })
 
-void *xzalloc(size_t size);
-void *xrealloc(void *ptr, size_t size);
-void *xcalloc(size_t nmemb, size_t size);
-void *xvalloc(size_t size);
-int prealloc(int fd, uint64_t size);
 ssize_t xread(int fd, void *buf, size_t len);
 ssize_t xwrite(int fd, const void *buf, size_t len);
 ssize_t xpread(int fd, void *buf, size_t count, off_t offset);
 ssize_t xpwrite(int fd, const void *buf, size_t count, off_t offset);
-int xmkdir(const char *pathname, mode_t mode);
-int xftruncate(int fd, off_t length);
 int eventfd_xread(int efd);
 void eventfd_xwrite(int efd, int value);
 void pstrcpy(char *buf, int buf_size, const char *str);
-char *chomp(char *str);
-bool is_numeric(const char *p);
-const char *data_to_str(void *data, size_t data_length);
-pid_t gettid(void);
-int tkill(int tid, int sig);
-bool is_xattr_enabled(const char *path);
-const char *my_exe_path(void);
-
-int split_path(const char *path, size_t nr_segs, char **segs);
-void make_path(char *path, size_t size, size_t nr_segs, const char **segs);
 
 void find_zero_blocks(const void *buf, uint64_t *poffset, uint32_t *plen);
 void trim_zero_blocks(void *buf, uint64_t *poffset, uint32_t *plen);
-
-/* a type safe version of qsort() */
-#define xqsort(base, nmemb, compar)					\
-({									\
-	if (nmemb > 1) {						\
-		qsort(base, nmemb, sizeof(*(base)),			\
-		      (comparison_fn_t)compar);				\
-		assert(compar(base, base + 1) <= 0);			\
-	}								\
-})
-
-/* a type safe version of bsearch() */
-#define xbsearch(key, base, nmemb, compar)				\
-({									\
-	typeof(&(base)[0]) __ret = NULL;				\
-	if (nmemb > 0) {						\
-		assert(compar(key, key) == 0);				\
-		assert(compar(base, base) == 0);			\
-		__ret = bsearch(key, base, nmemb, sizeof(*(base)),	\
-				(comparison_fn_t)compar);		\
-	}								\
-	__ret;								\
-})
-
-/*
- * Binary Search of the ascending sorted array. When the key is not found, this
- * returns the next greater position.
- */
-#define nbsearch(key, base, nmemb, compar)				\
-({									\
-	typeof(key) __m,  __l = base, __r = base + nmemb - 1;		\
-	int __ret;							\
-									\
-	while(__l <= __r && likely(nmemb > 0)) {			\
-		__m = __l + (__r - __l) / 2;				\
-		__ret = compar(key, __m);				\
-		if (__ret < 0)						\
-			__r = __m - 1;					\
-		else if (__ret > 0)					\
-			__l = __m + 1;					\
-		else {							\
-			__l = __m;					\
-			break;						\
-		}							\
-	}								\
-	__l;								\
-})
-
-/* a type safe version of lfind() */
-#define xlfind(key, base, nmemb, compar)				\
-({									\
-	typeof(&(base)[0]) __ret = NULL;				\
-	if (nmemb > 0) {						\
-		size_t __n = nmemb;					\
-		assert(compar(key, key) == 0);				\
-		assert(compar(base, base) == 0);			\
-		__ret = lfind(key, base, &__n, sizeof(*(base)),		\
-			      (comparison_fn_t)compar);			\
-	}								\
-	__ret;								\
-})
-
-/*
- * Search 'key' in the array 'base' linearly and remove it if it found.
- *
- * If 'key' is found in 'base', this function increments *nmemb and returns
- * true.
- */
-#define xlremove(key, base, nmemb, compar)				\
-({									\
-	bool __removed = false;						\
-	typeof(&(base)[0]) __e;						\
-									\
-	__e = xlfind(key, base, *(nmemb), compar);			\
-	if (__e != NULL) {						\
-		(*(nmemb))--;						\
-		memmove(__e, __e + 1,					\
-			sizeof(*(base)) * (*(nmemb) - (__e - (base)))); \
-		__removed = true;					\
-	}								\
-	__removed;							\
-})
 
 #define SWAP(a, b) { typeof(a) tmp; tmp = a; a = b; b = tmp; }
 

@@ -57,8 +57,11 @@ static int unlock_vdi(struct sd_cluster *c, struct sd_vdi *vdi)
 
 static struct sd_vdi *alloc_vdi(struct sd_cluster *c, char *name)
 {
-	struct sd_vdi *new = xzalloc(sizeof(*new));
+	struct sd_vdi *new = malloc(sizeof(*new));
 
+	if (!new)
+		return NULL;
+	memset(new, 0, sizeof(*new));
 	new->name = name;
 	new->inode = malloc(sizeof(struct sd_inode));
 	if (!new->inode) {
@@ -140,7 +143,12 @@ struct sd_request *alloc_request(struct sd_cluster *c,
 		errno = SD_RES_SYSTEM_ERROR;
 		return NULL;
 	}
-	req = xzalloc(sizeof(*req));
+	req = calloc(1, sizeof(*req));
+	if (!req) {
+		errno = SD_RES_NO_MEM;
+		close(fd);
+		return NULL;
+	}
 	req->efd = fd;
 	req->cluster = c;
 	req->data = data;
