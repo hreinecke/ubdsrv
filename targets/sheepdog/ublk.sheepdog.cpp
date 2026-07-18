@@ -17,7 +17,8 @@
 #include "ublksrv_tgt.h"
 #include "sheepdog_proto.h"
 #include "sheepdog.h"
-#include "sheep.h"
+
+#define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode->header.block_size_shift)
 
 struct sheepdog_dev {
 	char sd_host[256];
