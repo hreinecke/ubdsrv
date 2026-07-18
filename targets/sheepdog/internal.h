@@ -95,6 +95,14 @@ static inline const char *sd_strerror(int err)
 	return descs[err];
 }
 
+#define DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
+
+static inline size_t count_data_objs(const struct sd_inode_header *inode)
+{
+	return DIV_ROUND_UP(inode->vdi_size,
+			    (1UL << inode->block_size_shift));
+}
+
 struct sheep_request *find_inflight_request_oid(struct sd_cluster *c,
 						       uint64_t oid);
 struct sheep_request *alloc_sheep_request(struct sheep_aiocb *aiocb,
@@ -111,7 +119,7 @@ void submit_blocking_sheep_request(struct sd_cluster *c, uint64_t oid);
 uint32_t sheep_inode_get_vid(struct sd_request *req, uint32_t idx);
 
 struct sd_request *alloc_request(struct sd_cluster *c, void *data,
-	size_t count, uint8_t op);
+	size_t count, enum sheep_request_type op);
 void queue_request(struct sd_request *req);
 void free_request(struct sd_request *req);
 

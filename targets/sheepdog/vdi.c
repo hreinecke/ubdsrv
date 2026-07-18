@@ -21,7 +21,6 @@
 #include "sheepdog_proto.h"
 #include "sheepdog.h"
 #include "internal.h"
-#include "sheep.h"
 
 static int lock_vdi(struct sd_cluster *c, struct sd_vdi *vdi)
 {
@@ -151,10 +150,12 @@ struct sd_request *alloc_request(struct sd_cluster *c,
 int init_request(struct sd_cluster *c, struct sd_request *req,
 		  void *data, size_t count, enum sheep_request_type op)
 {
-	req->fd = eventfd(0, 0);
-	if (fd < 0) {
+	int fd;
+
+	fd = eventfd(0, 0);
+	if (fd < 0)
 		return SD_RES_SYSTEM_ERROR;
-	}
+
 	req->efd = fd;
 	req->cluster = c;
 	req->data = data;
@@ -173,7 +174,6 @@ int sd_vdi_read(struct sd_cluster *c, struct sd_request *req,
 	if (ret)
 		return ret;
 
-	req->vdi = vdi;
 	req->offset = offset;
 	queue_request(req);
 
@@ -194,7 +194,6 @@ int sd_vdi_write(struct sd_cluster *c, struct sd_request *req, void *buf,
 	if (ret)
 		return ret;
 
-	req->vdi = vdi;
 	req->offset = offset;
 	queue_request(req);
 
@@ -206,7 +205,7 @@ int sd_vdi_write(struct sd_cluster *c, struct sd_request *req, void *buf,
 	return ret;
 }
 
-int sd_vdi_discard(struct sd_cluster *c, struct sd_request *ret, void *buf,
+int sd_vdi_discard(struct sd_cluster *c, struct sd_request *req, void *buf,
 		   size_t count, off_t offset)
 {
 	int ret;
@@ -215,7 +214,6 @@ int sd_vdi_discard(struct sd_cluster *c, struct sd_request *ret, void *buf,
 	if (ret)
 		return ret;
 
-	req->vdi = vdi;
 	req->offset = offset;
 	queue_request(req);
 
@@ -362,7 +360,7 @@ static int vdi_read_inode_header(struct sd_cluster *c, char *name,
 }
 
 static int vdi_read_inode(struct sd_cluster *c, char *name,
-			  char *tag, struct sd_inode *inode, bool locked)
+			  char *tag, struct sd_inode *inode)
 {
 	int ret;
 	uint32_t vid = 0;
@@ -549,15 +547,6 @@ int sd_vdi_delete(struct sd_cluster *c, char *name, char *tag)
 		goto out;
 	}
 
-	sd_init_req(&hdr, SD_OP_DELETE_CACHE);
-	hdr.obj.oid = vid_to_vdi_oid(vid);
-	ret = sd_run_sdreq(c, &hdr, NULL);
-	if (ret != SD_RES_SUCCESS) {
-		ublk_err("%s: Failed to delete cache :%s\n",
-				sd_strerror(ret));
-		goto out;
-	}
-
 	inode = xmalloc(sizeof(*inode));
 	ret = vdi_read_inode(c, name, tag, inode);
 	if (ret != SD_RES_SUCCESS) {
@@ -621,7 +610,7 @@ int sd_vdi_rollback(struct sd_cluster *c, char *name, char *tag)
 	struct sd_inode_header inode;
 
 	if (!tag || *tag == '\0') {
-		ublk_err("%s: Snapshot tag can NOT be null for rollback\n"
+		ublk_err("%s: Snapshot tag can NOT be null for rollback\n",
 			__func__);
 		return SD_RES_INVALID_PARMS;
 	}
