@@ -63,13 +63,10 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		  uint32_t idx, uint32_t *vid);
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		 const struct ublksrv_io_desc *iod,
 		 struct sd_request *sd_io, uint64_t oid);
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		    const struct ublksrv_io_desc *iod,
 		    struct sd_request *sd_io, uint64_t oid);
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		  const struct ublksrv_io_desc *iod,
 		  struct sd_request *sd_io, uint32_t vid);
 
 #ifdef __cplusplus

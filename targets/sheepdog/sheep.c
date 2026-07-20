@@ -506,12 +506,10 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		const struct ublksrv_io_desc *iod,
 		struct sd_request *sd_io, uint64_t oid)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
-	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t idx = offset / object_size;
+	uint32_t idx = sd_io->offset / object_size;
 	uint32_t new_vid = 0;
 	bool cleared = false;
 	int ret = 0;
@@ -551,8 +549,11 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 static void sd_prep_write(struct sd_vdi *sd_vdi,
 			  struct sd_request *sd_io,
-			  unsigned int idx, uint32_t vid)
+			  uint32_t vid)
 {
+	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
+	uint32_t idx = sd_io->offset / object_size;
+
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
@@ -598,22 +599,14 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 }
 
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		const struct ublksrv_io_desc *iod,
 		struct sd_request *sd_io, uint32_t vid)
 {
-	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
-	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t total = iod->nr_sectors << 9;
-	uint64_t start = offset % object_size;
-	uint32_t idx = offset / object_size;
 	int ret;
 
-	memset(sd_io, 0, sizeof(*sd_io));
-	sd_prep_write(sd_vdi, sd_io, idx, vid);
+	sd_prep_write(sd_vdi, sd_io, vid);
 
-	sd_io->addr = (void *)iod->addr;
-	sd_io->req.obj.offset = start;
-	sd_io->req.data_length = total;
+	sd_io->req.obj.offset = sd_io->offset;
+	sd_io->req.data_length = sd_io->length;
 	sd_io->req.obj.copies = sd_vdi->inode.nr_copies;
 
 	ret = sd_submit(ctx->fd, sd_io, ctx->timeout);
@@ -627,8 +620,7 @@ int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		const struct ublksrv_io_desc *iod,
-		struct sd_request *sd_io, uint64_t oid)
+		 struct sd_request *sd_io, uint64_t oid)
 {
 	int ret;
 
