@@ -88,10 +88,14 @@ static void sd_inode_is_snapshot(struct sd_vdi *sd_vdi,
 static int sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
 				     struct sd_request *sd_io)
 {
-	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
+	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED) {
 		sd_inode_invalidate(sd_vdi, true);
-	else if (sd_io->rsp.result == SD_RES_READONLY)
+		return 0;
+	}
+	if (sd_io->rsp.result == SD_RES_READONLY) {
 		sd_inode_is_snapshot(sd_vdi, true);
+		return 0;
+	}
 	return sd_result_to_errno(sd_io);
 }
 
@@ -580,11 +584,12 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 	ret = sd_submit_req(ctx, sd_io);
 	if (ret < 0)
-		return ret;
+		goto out;
 	ret = sd_receive_rsp(ctx, sd_io);
 	if (ret < 0)
-		return ret;
+		goto out;
 	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
+out:
 	if (ret < 0) {
 		/* Something happened during I/O, re-read inode */
 		sd_inode_invalidate(sd_vdi, true);
@@ -716,7 +721,7 @@ int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 			 __func__, sd_io->req.obj.oid);
 		ret = SD_RES_NO_OBJ;
 	}
-	if (ret < 0 && sd_io->rsp.result != SD_RES_INODE_INVALIDATED) {
+	if (ret < 0) {
 		ublk_err("%s: tag %u oid %lx rsp %d\n",
 			 __func__, sd_io->req.id, oid,
 			 sd_io->rsp.result);
