@@ -28,10 +28,10 @@ struct sheepdog_dev {
 	bool unlock;
 };
 
-static inline struct sd_io_context *
-io_tgt_to_sd_io(const struct ublk_io_tgt *io)
+static inline struct sd_request *
+io_tgt_to_sd_request(const struct ublk_io_tgt *io)
 {
-	return (struct sd_io_context *)(io + 1);
+	return (struct sd_request *)(io + 1);
 }
 
 static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
@@ -129,7 +129,7 @@ static int sheepdog_setup_tgt(struct ublksrv_dev *ub_dev, int type)
 	}
 
 	tgt->io_data_size = sizeof(struct ublk_io_tgt) +
-		sizeof(struct sd_io_context);
+		sizeof(struct sd_request);
 	tgt->dev_size = dev->vdi.inode.vdi_size >> 9;
 	tgt->tgt_ring_depth = info->queue_depth;
 	tgt->nr_fds = 0;
@@ -391,7 +391,7 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 {
 	struct sd_queue_ctx *q_ctx =
 		(struct sd_queue_ctx *)q->private_data;
-	struct sd_io_context *sd_io = io_tgt_to_sd_io(io);
+	struct sd_request *sd_io = io_tgt_to_sd_request(io);
 	struct sheepdog_dev *dev =
 		(struct sheepdog_dev *)q->dev->tgt.tgt_data;
 	const struct ublksrv_io_desc *iod = data->iod;

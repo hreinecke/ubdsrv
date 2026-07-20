@@ -64,7 +64,7 @@ static void sd_inode_is_snapshot(struct sd_vdi *sd_vdi,
 }
 
 static void sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
-				     struct sd_io_context *sd_io)
+				     struct sd_request *sd_io)
 {
 	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
 		sd_inode_invalidate(sd_vdi, true);
@@ -174,7 +174,7 @@ err:
 	return sock;
 }
 
-static int sd_result_to_errno(struct sd_io_context *sd_io)
+static int sd_result_to_errno(struct sd_request *sd_io)
 {
 	switch (sd_io->rsp.result) {
 	case SD_RES_SUCCESS:
@@ -196,7 +196,7 @@ static int sd_result_to_errno(struct sd_io_context *sd_io)
 	return -EIO;
 }
 
-static int sd_submit(int fd, struct sd_io_context *sd_io, unsigned long timeout)
+static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
 {
 	struct iovec iov[2];
 	bool is_write = sd_io->req.flags & SD_FLAG_CMD_WRITE;
@@ -303,7 +303,7 @@ done:
 int sd_vdi_lookup(struct sd_queue_ctx *ctx, const char *vdi_name,
 		uint32_t snapid, const char *tag, uint32_t *vid, bool lock)
 {
-	struct sd_io_context sd_io = { 0 };
+	struct sd_request sd_io = { 0 };
 	size_t buflen = SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN;
 	char name_buf[SD_MAX_VDI_LEN + SD_MAX_VDI_TAG_LEN] = {0};
 	int ret;
@@ -341,7 +341,7 @@ int sd_vdi_lookup(struct sd_queue_ctx *ctx, const char *vdi_name,
 
 int sd_vdi_release(struct sd_queue_ctx *ctx, struct sd_vdi *vdi)
 {
-	struct sd_io_context sd_io = { 0 };
+	struct sd_request sd_io = { 0 };
 	int ret;
 
 	sd_io.req.opcode = SD_OP_RELEASE_VDI;
@@ -358,18 +358,17 @@ int sd_vdi_release(struct sd_queue_ctx *ctx, struct sd_vdi *vdi)
 	return 0;
 }
 
-int sd_read_object(struct sd_queue_ctx *ctx, struct sd_io_context *sd_io,
-		uint64_t oid, void *buf, size_t offset, size_t len)
+int sd_read_object(struct sd_queue_ctx *ctx, struct sd_request *sd_io,
+		   uint64_t oid)
 {
 	int ret;
 
 retry:
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.opcode = SD_OP_READ_OBJ;
-	sd_io->req.data_length = len;
+	sd_io->req.data_length = sd_io->length;
 	sd_io->req.obj.oid = oid;
-	sd_io->req.obj.offset = offset;
-	sd_io->addr = buf;
+	sd_io->req.obj.offset = sd_io->offset;
 	ublk_log ( "%s: opcode %u oid %lx len %u\n",
 		   __func__, sd_io->req.opcode, sd_io->req.obj.oid,
 		   sd_io->req.data_length);
@@ -397,7 +396,7 @@ retry:
 
 int sd_read_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi)
 {
-	struct sd_io_context sd_io = { 0 };
+	struct sd_request sd_io = { 0 };
 	int need_reload = 0, ret;
 	struct sd_inode *inode;
 	uint32_t vid = sd_vdi->vid;
@@ -418,16 +417,19 @@ retry:
 		ret = sd_vdi_lookup(ctx, sd_vdi->inode.name,
 				    CURRENT_VDI_ID, NULL, &vid, true);
 		if (ret == 0) {
-			ret = sd_read_object(ctx, &sd_io, vid_to_vdi_oid(vid),
-					     (char *)inode, 0,
-					     SD_INODE_HEADER_SIZE);
+			sd_io.length = SD_INODE_HEADER_SIZE;
+			sd_io.addr = (void *)inode;
+			sd_io.offset = 0;
+			ret = sd_read_object(ctx, &sd_io, vid_to_vdi_oid(vid));
 			invalidated =
 				(sd_io.rsp.result == SD_RES_INODE_INVALIDATED);
 			snapshot = (sd_io.rsp.result == SD_RES_READONLY);
 		}
 	} else {
-		ret = sd_read_object(ctx, &sd_io, vid_to_vdi_oid(vid),
-				     (char *)inode, 0, SD_INODE_SIZE);
+		sd_io.length = SD_INODE_SIZE;
+		sd_io.addr = (void *)inode;
+		sd_io.offset = 0;
+		ret = sd_read_object(ctx, &sd_io, vid_to_vdi_oid(vid));
 		invalidated = (sd_io.rsp.result == SD_RES_INODE_INVALIDATED);
 		snapshot = (sd_io.rsp.result == SD_RES_READONLY);
 		if (ret == 0 && inode->snap_ctime) {
@@ -454,7 +456,7 @@ retry:
 int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		    uint64_t req_oid)
 {
-	struct sd_io_context sd_io = { 0 };
+	struct sd_request sd_io = { 0 };
 	uint32_t vid, idx;
 	int need_reload = 0, ret;
 
@@ -505,7 +507,7 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io, uint64_t oid)
+		struct sd_request *sd_io, uint64_t oid)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
@@ -548,7 +550,7 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 static void sd_prep_write(struct sd_vdi *sd_vdi,
-			  struct sd_io_context *sd_io,
+			  struct sd_request *sd_io,
 			  unsigned int idx, uint32_t vid)
 {
 	sd_io->req.proto_ver = SD_PROTO_VER;
@@ -597,7 +599,7 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io, uint32_t vid)
+		struct sd_request *sd_io, uint32_t vid)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
@@ -626,21 +628,15 @@ int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		const struct ublksrv_io_desc *iod,
-		struct sd_io_context *sd_io, uint64_t oid)
+		struct sd_request *sd_io, uint64_t oid)
 {
-	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
-	uint64_t offset = (uint64_t)iod->start_sector << 9;
-	uint32_t total = iod->nr_sectors << 9;
-	uint32_t idx = offset / object_size;
-	uint64_t start = offset % object_size;
 	int ret;
 
-	ret = sd_read_object(ctx, sd_io, oid, (void *)iod->addr,
-			     start, total);
+	ret = sd_read_object(ctx, sd_io, oid);
 	sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (ret < 0 && sd_io->rsp.result != SD_RES_INODE_INVALIDATED) {
 		ublk_err("%s: tag %u oid %lx rsp %d\n",
-			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 __func__, sd_io->req.id, oid,
 			 sd_io->rsp.result);
 	}
 	return ret;

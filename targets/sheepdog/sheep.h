@@ -28,18 +28,21 @@ struct sd_queue_ctx {
 	unsigned long timeout;
 };
 
-enum sd_io_state {
-	SD_SEND_REQ,
-	SD_SEND_DATA,
-	SD_RECV_RSP,
-	SD_RECV_DATA,
+enum sheep_request_type {
+	VDI_READ = 1,
+	VDI_WRITE,
+	VDI_CREATE,
+	SHEEP_CTL,
 };
 
-struct sd_io_context {
-	enum sd_io_state state;
+struct sd_request {
 	struct sd_req req;
 	struct sd_rsp rsp;
 	void *addr;
+	size_t length;
+	off_t offset;
+	enum sheep_request_type opcode;
+	int ret;
 };
 
 #define SD_OBJECT_SIZE(v) (UINT32_C(1) << (v)->inode.block_size_shift)
@@ -50,8 +53,8 @@ int sd_vdi_lookup(struct sd_queue_ctx *ctx, const char *vdi_name,
 		uint32_t snapid, const char *tag, uint32_t *vid, bool lock);
 int sd_vdi_release(struct sd_queue_ctx *ctx, struct sd_vdi *vdi);
 bool sd_inode_needs_reload(struct sd_vdi *sd_vdi);
-int sd_read_object(struct sd_queue_ctx *ctx, struct sd_io_context *sd_io,
-		   uint64_t oid, void *buf, size_t offset, size_t len);
+int sd_read_object(struct sd_queue_ctx *ctx, struct sd_request *sd_io,
+		   uint64_t oid);
 int sd_read_inode(struct sd_queue_ctx *ctx, struct sd_vdi *vdi);
 int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		    uint64_t req_oid);
@@ -61,13 +64,13 @@ int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		  uint32_t idx, uint32_t *vid);
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		 const struct ublksrv_io_desc *iod,
-		 struct sd_io_context *sd_io, uint64_t oid);
+		 struct sd_request *sd_io, uint64_t oid);
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		    const struct ublksrv_io_desc *iod,
-		    struct sd_io_context *sd_io, uint64_t oid);
+		    struct sd_request *sd_io, uint64_t oid);
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		  const struct ublksrv_io_desc *iod,
-		  struct sd_io_context *sd_io, uint32_t vid);
+		  struct sd_request *sd_io, uint32_t vid);
 
 #ifdef __cplusplus
 }
