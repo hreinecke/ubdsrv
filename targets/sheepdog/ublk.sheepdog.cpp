@@ -260,6 +260,8 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	uint64_t offset = (uint64_t)iod->start_sector << 9;
 	uint32_t total = iod->nr_sectors << 9;
 	uint64_t start = offset % object_size;
+	uint32_t idx = offset / object_size;
+	uint64_t oid = vid_to_data_oid(dev->vdi, idx);
 	int ublk_op = ublksrv_get_op(iod);
 	size_t len = object_size - start;
 	int ret = 0;

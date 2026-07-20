@@ -131,6 +131,18 @@ uint32_t sheep_inode_get_vid(struct sd_request *req, uint32_t idx)
 	return vid;
 }
 
+bool sheep_inode_clear_vid(struct sd_request *req, uint32_t idx)
+{
+	bool cleared = false;
+
+	sd_write_lock(&req->vdi->lock);
+	if (req->vdi->indoe->data_vdi_id[idx])
+		cleared = true;
+	req->vdi_inode->data_vdi_id[idx] = 0;
+	sd_write_unlock(&req->vdi->lock);
+	return cleared;
+}
+
 int submit_sheep_request(struct sheep_request *req)
 {
 	struct sd_req hdr = {};
@@ -163,6 +175,13 @@ int submit_sheep_request(struct sheep_request *req)
 		break;
 	case VDI_READ:
 		hdr.opcode = SD_OP_READ_OBJ;
+		ret = sheep_submit_sdreq(c, &hdr, NULL, 0);
+		if (ret < 0)
+			goto err;
+		break;
+	case VDI_DISCARD:
+		hdr.opcode = SD_OP_WRITE_OBJ;
+		hdr.flags |= SD_FLAG_CMD_WRITE | SD_FLAG_CMD_TGT;
 		ret = sheep_submit_sdreq(c, &hdr, NULL, 0);
 		if (ret < 0)
 			goto err;
