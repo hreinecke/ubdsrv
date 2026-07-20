@@ -82,6 +82,7 @@
 #define SD_RES_READONLY      0x1A /* Object is read-only */
 /* inode object in client is invalidated, refreshing is required */
 #define SD_RES_INODE_INVALIDATED 0x1D
+#define SD_RES_CONTINUE      0x1E /* Continue with operation */
 
 /* errors above 0x80 are sheepdog-internal */
 
