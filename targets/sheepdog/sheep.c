@@ -540,7 +540,7 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	return sd_update_vid(ctx, sd_vdi, idx, vid);
 }
 
-static int sd_prep_discard(struct sd_vdi *sd_vdi, struct sd_request *sd_io)
+int sd_prep_discard(struct sd_vdi *sd_vdi, struct sd_request *sd_io)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint32_t idx = sd_io->offset / object_size;
@@ -573,6 +573,21 @@ static int sd_prep_discard(struct sd_vdi *sd_vdi, struct sd_request *sd_io)
 	return SD_RES_CONTINUE;
 }
 
+int sd_unprep_discard(struct sd_vdi *sd_vdi, struct sd_request *sd_io, int ret)
+{
+	if (!ret)
+		ret = sd_inode_evaluate_result(sd_vdi, sd_io);
+
+	if (ret < 0) {
+		/* Something happened during I/O, re-read inode */
+		sd_inode_invalidate(sd_vdi, true);
+		ublk_log("%s: tag %u oid %lx opcode %x rsp %d\n",
+			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 sd_io->req.opcode, sd_io->rsp.result);
+	}
+	return ret;
+}
+
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		struct sd_request *sd_io)
 {
@@ -584,24 +599,13 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 	ret = sd_submit_req(ctx, sd_io);
 	if (ret < 0)
-		goto out;
+		goto unprep;
 	ret = sd_receive_rsp(ctx, sd_io);
-	if (ret < 0)
-		goto out;
-	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
-out:
-	if (ret < 0) {
-		/* Something happened during I/O, re-read inode */
-		sd_inode_invalidate(sd_vdi, true);
-		ublk_log("%s: tag %u oid %lx opcode %x rsp %d\n",
-			 __func__, sd_io->req.id, sd_io->req.obj.oid,
-			 sd_io->req.opcode, sd_io->rsp.result);
-	}
-	return ret;
+unprep:
+	return sd_unprep_discard(sd_vdi, sd_io, ret);
 }
 
-static void sd_prep_write(struct sd_vdi *sd_vdi,
-			  struct sd_request *sd_io)
+void sd_prep_write(struct sd_vdi *sd_vdi, struct sd_request *sd_io)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint32_t idx = sd_io->offset / object_size;
@@ -656,6 +660,18 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 	}
 }
 
+int sd_unprep_write(struct sd_vdi *sd_vdi, struct sd_request *sd_io, int ret)
+{
+	if (!ret)
+		ret = sd_inode_evaluate_result(sd_vdi, sd_io);
+	if (ret < 0) {
+		ublk_err("%s: tag %u oid %lx opcode %x rsp %d ret %d\n",
+			 __func__, sd_io->req.id, sd_io->req.obj.oid,
+			 sd_io->req.opcode, sd_io->rsp.result);
+	}
+	return ret;
+}
+
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		struct sd_request *sd_io)
 {
@@ -665,21 +681,14 @@ int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 	ret = sd_submit_req(ctx, sd_io);
 	if (ret < 0)
-		return ret;
+		goto unprep;
+
 	ret = sd_receive_rsp(ctx, sd_io);
-	if (ret < 0)
-		return ret;
-	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
-	if (ret < 0) {
-		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
-			 __func__, sd_io->req.id, sd_io->req.obj.oid,
-			 sd_io->req.opcode, sd_io->rsp.result);
-	}
-	return ret;
+unprep:
+	return sd_unprep_write(sd_vdi, sd_io, ret);
 }
 
-static void sd_prep_read(struct sd_vdi *sd_vdi,
-			  struct sd_request *sd_io)
+void sd_prep_read(struct sd_vdi *sd_vdi, struct sd_request *sd_io)
 {
 	uint32_t offset_size = SD_OBJECT_SIZE(sd_vdi);
 	uint32_t idx = sd_io->offset / offset_size;
@@ -695,30 +704,20 @@ static void sd_prep_read(struct sd_vdi *sd_vdi,
 		   sd_io->req.data_length);
 }
 
-int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		 struct sd_request *sd_io)
+int sd_unprep_read(struct sd_vdi *sd_vdi, struct sd_request *sd_io, int ret)
 {
-	uint32_t offset_size = SD_OBJECT_SIZE(sd_vdi);
-	uint32_t idx = sd_io->offset / offset_size;
-	uint64_t oid = vid_to_data_oid(sd_io->vid, idx);
-	int ret;
+	uint64_t oid = sd_io->req.obj.oid;
 
-	sd_prep_read(sd_vdi, sd_io);
-	ret = sd_submit_req(ctx, sd_io);
-	if (ret < 0)
-		return ret;
-	ret = sd_receive_rsp(ctx, sd_io);
-	if (ret < 0)
-		return ret;
-	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
+	if (!ret)
+		ret = sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (sd_io->rsp.result == SD_RES_NO_OBJ && (oid & VDI_BIT)) {
 		/*
 		 * internal sheepdog race;
 		 * VDI became snapshot but inode
 		 * object has not been created (yet).
 		 */
-		ublk_log("%s: oid %lx not found, retry\n",
-			 __func__, sd_io->req.obj.oid);
+		ublk_log("%s: tag %u oid %lx not found, retry\n",
+			 __func__, sd_io->req.id, oid);
 		ret = SD_RES_NO_OBJ;
 	}
 	if (ret < 0) {
@@ -727,4 +726,18 @@ int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 			 sd_io->rsp.result);
 	}
 	return ret;
+}
+
+int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
+		 struct sd_request *sd_io)
+{
+	int ret;
+
+	sd_prep_read(sd_vdi, sd_io);
+	ret = sd_submit_req(ctx, sd_io);
+	if (ret < 0)
+		goto unprep;
+	ret = sd_receive_rsp(ctx, sd_io);
+unprep:
+	return sd_unprep_read(sd_vdi, sd_io, ret);
 }

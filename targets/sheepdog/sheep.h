@@ -63,6 +63,12 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		   uint32_t idx, uint32_t *vid);
 int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		  uint32_t idx, uint32_t *vid);
+void sd_prep_read(struct sd_vdi *sd_vdi, struct sd_request *sd_io);
+int sd_unprep_read(struct sd_vdi *sd_vdi, struct sd_request *sd_io, int ret);
+void sd_prep_write(struct sd_vdi *sd_vdi, struct sd_request *sd_io);
+int sd_unprep_write(struct sd_vdi *sd_vdi, struct sd_request *sd_io, int ret);
+int sd_prep_discard(struct sd_vdi *sd_vdi, struct sd_request *sd_io);
+int sd_unprep_discard(struct sd_vdi *sd_vdi, struct sd_request *sd_io, int ret);
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		 struct sd_request *sd_io);
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
