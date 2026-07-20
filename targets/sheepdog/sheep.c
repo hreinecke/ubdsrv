@@ -497,7 +497,10 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 {
 	int ret;
 
-	*vid = sd_inode_get_vid(sd_vdi, idx);
+	pthread_mutex_lock(&sd_vdi->inode_lock);
+	if (!sd_vdi->invalidated)
+		*vid = sd_vdi->inode.data_vdi_id[idx];
+	pthread_mutex_unlock(&sd_vdi->inode_lock);
 	/* Return if object is present */
 	if (*vid)
 		return 0;
