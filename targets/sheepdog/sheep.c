@@ -35,6 +35,28 @@
 #include "sheepdog_proto.h"
 #include "sheep.h"
 
+static int sd_result_to_errno(struct sd_request *sd_io)
+{
+	switch (sd_io->rsp.result) {
+	case SD_RES_SUCCESS:
+		return 0;
+	case SD_RES_NO_OBJ:
+	case SD_RES_NO_VDI:
+	case SD_RES_NO_BASE_VDI:
+		return -ENOENT;
+	case SD_RES_VDI_EXIST:
+		return -EEXIST;
+	case SD_RES_INVALID_PARMS:
+		return -EINVAL;
+		break;
+	case SD_RES_VDI_LOCKED:
+		return -EILSEQ;
+	default:
+		break;
+	}
+	return -EIO;
+}
+
 static uint32_t sd_inode_get_vid(struct sd_vdi *sd_vdi,
 				       uint32_t idx)
 {
@@ -63,13 +85,14 @@ static void sd_inode_is_snapshot(struct sd_vdi *sd_vdi,
 	pthread_mutex_unlock(&sd_vdi->inode_lock);
 }
 
-static void sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
+static int sd_inode_evaluate_result(struct sd_vdi *sd_vdi,
 				     struct sd_request *sd_io)
 {
 	if (sd_io->rsp.result == SD_RES_INODE_INVALIDATED)
 		sd_inode_invalidate(sd_vdi, true);
 	else if (sd_io->rsp.result == SD_RES_READONLY)
 		sd_inode_is_snapshot(sd_vdi, true);
+	return sd_result_to_errno(sd_io);
 }
 
 bool sd_inode_needs_reload(struct sd_vdi *sd_vdi)
@@ -174,29 +197,7 @@ err:
 	return sock;
 }
 
-static int sd_result_to_errno(struct sd_request *sd_io)
-{
-	switch (sd_io->rsp.result) {
-	case SD_RES_SUCCESS:
-		return 0;
-	case SD_RES_NO_OBJ:
-	case SD_RES_NO_VDI:
-	case SD_RES_NO_BASE_VDI:
-		return -ENOENT;
-	case SD_RES_VDI_EXIST:
-		return -EEXIST;
-	case SD_RES_INVALID_PARMS:
-		return -EINVAL;
-		break;
-	case SD_RES_VDI_LOCKED:
-		return -EILSEQ;
-	default:
-		break;
-	}
-	return -EIO;
-}
-
-static int sd_submit(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
+static int sd_submit_req(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
 {
 	struct iovec iov[2];
 	bool is_write = sd_io->req.flags & SD_FLAG_CMD_WRITE;
@@ -233,6 +234,19 @@ static int sd_submit(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
 			 __func__, errno);
 		return -errno;
 	}
+	return 0;
+}
+
+static int sd_receive_rsp(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
+{
+	struct iovec iov[2];
+	bool is_write = sd_io->req.flags & SD_FLAG_CMD_WRITE;
+	fd_set rfds;
+	struct timeval tv;
+	struct msghdr msg;
+	size_t wlen, rlen, off;
+	int ret;
+
 	FD_ZERO(&rfds);
 	FD_SET(ctx->fd, &rfds);
 	tv.tv_sec = ctx->timeout;
@@ -295,7 +309,20 @@ static int sd_submit(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
 		off += ret;
 	}
 done:
+	return ret;
+}
+
+static int sd_submit(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
+{
+	int ret = sd_submit_req(ctx, sd_io);
+
+	if (ret < 0)
+		return ret;
+	ret = sd_receive_rsp(ctx, sd_io);
+	if (ret < 0)
+		return ret;
 	return sd_result_to_errno(sd_io);
+
 }
 
 /* --- Sheepdog Protocol Handshake --- */
@@ -471,7 +498,8 @@ int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	sd_io.req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
 	sd_io.addr = &vid;
 	ret = sd_submit(ctx, &sd_io);
-	sd_inode_evaluate_result(sd_vdi, &sd_io);
+	if (!ret)
+		ret = sd_inode_evaluate_result(sd_vdi, &sd_io);
 	if (ret < 0) {
 		ublk_err( "%s: update inode oid %lx failed, rsp %d err %d\n",
 			  __func__, sd_io.req.obj.oid,
@@ -550,8 +578,13 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	if (ret == SD_RES_SUCCESS)
 		return ret;
 
-	ret = sd_submit(ctx, sd_io);
-	sd_inode_evaluate_result(sd_vdi, sd_io);
+	ret = sd_submit_req(ctx, sd_io);
+	if (ret < 0)
+		return ret;
+	ret = sd_receive_rsp(ctx, sd_io);
+	if (ret < 0)
+		return ret;
+	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (ret < 0) {
 		/* Something happened during I/O, re-read inode */
 		sd_inode_invalidate(sd_vdi, true);
@@ -625,8 +658,13 @@ int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 	sd_prep_write(sd_vdi, sd_io);
 
-	ret = sd_submit(ctx, sd_io);
-	sd_inode_evaluate_result(sd_vdi, sd_io);
+	ret = sd_submit_req(ctx, sd_io);
+	if (ret < 0)
+		return ret;
+	ret = sd_receive_rsp(ctx, sd_io);
+	if (ret < 0)
+		return ret;
+	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (ret < 0) {
 		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
 			 __func__, sd_io->req.id, sd_io->req.obj.oid,
@@ -661,8 +699,13 @@ int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	int ret;
 
 	sd_prep_read(sd_vdi, sd_io);
-	ret = sd_submit(ctx, sd_io);
-	sd_inode_evaluate_result(sd_vdi, sd_io);
+	ret = sd_submit_req(ctx, sd_io);
+	if (ret < 0)
+		return ret;
+	ret = sd_receive_rsp(ctx, sd_io);
+	if (ret < 0)
+		return ret;
+	ret = sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (sd_io->rsp.result == SD_RES_NO_OBJ && (oid & VDI_BIT)) {
 		/*
 		 * internal sheepdog race;
