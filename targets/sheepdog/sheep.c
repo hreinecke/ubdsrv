@@ -196,7 +196,7 @@ static int sd_result_to_errno(struct sd_request *sd_io)
 	return -EIO;
 }
 
-static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
+static int sd_submit(struct sd_queue_ctx *ctx, struct sd_request *sd_io)
 {
 	struct iovec iov[2];
 	bool is_write = sd_io->req.flags & SD_FLAG_CMD_WRITE;
@@ -227,15 +227,15 @@ static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
 		.msg_iov = &iov[0],
 		.msg_iovlen = wlen ? 2 : 1,
 	};
-	ret = sendmsg(fd, &msg, MSG_DONTWAIT);
+	ret = sendmsg(ctx->fd, &msg, MSG_DONTWAIT);
 	if (ret < 0) {
 		ublk_err("%s: sendmsg req failed, errno %d\n",
 			 __func__, errno);
 		return -errno;
 	}
 	FD_ZERO(&rfds);
-	FD_SET(fd, &rfds);
-	tv.tv_sec = timeout;
+	FD_SET(ctx->fd, &rfds);
+	tv.tv_sec = ctx->timeout;
 	tv.tv_usec = 0;
 
 	iov[0] = (struct iovec){
@@ -246,7 +246,7 @@ static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
 		.msg_iov = &iov[0],
 		.msg_iovlen = 1,
 	};
-	ret = select(fd + 1, &rfds, NULL, NULL, &tv);
+	ret = select(ctx->fd + 1, &rfds, NULL, NULL, &tv);
 	if (ret < 0) {
 		ublk_err("%s: select() failed, errno %d\n",
 			 __func__, errno);
@@ -256,7 +256,7 @@ static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
 		ublk_err("%s: selectl() timeout\n", __func__);
 		return -ETIMEDOUT;
 	}
-	ret = recvmsg(fd, &msg, MSG_WAITALL);
+	ret = recvmsg(ctx->fd, &msg, MSG_WAITALL);
 	if (ret < 0) {
 		ublk_err("%s: recvmsg rsp failed, errno %d\n",
 			 __func__, errno);
@@ -276,7 +276,7 @@ static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
 			.msg_iov = &iov[0],
 			.msg_iovlen = 1,
 		};
-		ret = select(fd + 1, &rfds, NULL, NULL, &tv);
+		ret = select(ctx->fd + 1, &rfds, NULL, NULL, &tv);
 		if (ret < 0) {
 			ublk_err("%s: select() failed, errno %d\n",
 				 __func__, errno);
@@ -286,7 +286,7 @@ static int sd_submit(int fd, struct sd_request *sd_io, unsigned long timeout)
 			ublk_err("%s: select() timeout\n", __func__);
 			return -ETIMEDOUT;
 		}
-		ret = recvmsg(fd, &msg, 0);
+		ret = recvmsg(ctx->fd, &msg, 0);
 		if (ret < 0) {
 			ublk_err("%s: recvmsg data failed, errno %d\n",
 				 __func__, errno);
@@ -324,7 +324,7 @@ int sd_vdi_lookup(struct sd_queue_ctx *ctx, const char *vdi_name,
 		strncpy(name_buf + SD_MAX_VDI_LEN, tag,
 			SD_MAX_VDI_TAG_LEN - 1);
 	sd_io.addr = name_buf;
-	ret = sd_submit(ctx->fd, &sd_io, ctx->timeout);
+	ret = sd_submit(ctx, &sd_io);
 	if (ret < 0) {
 		if (ret == -EILSEQ)
 			ublk_err( "%s: vdi '%s' is locked\n",
@@ -348,7 +348,7 @@ int sd_vdi_release(struct sd_queue_ctx *ctx, struct sd_vdi *vdi)
 	sd_io.req.vdi.type = LOCK_TYPE_SHARED;
 	sd_io.req.vdi.base_vdi_id = vdi->vid;
 
-	ret = sd_submit(ctx->fd, &sd_io, ctx->timeout);
+	ret = sd_submit(ctx, &sd_io);
 	if (ret < 0) {
 		ublk_err( "%s: failed to release vdi '%x', result %d\n",
 			  __func__, vdi->vid, sd_io.rsp.result);
@@ -372,7 +372,7 @@ retry:
 	ublk_log ( "%s: opcode %u oid %lx len %u\n",
 		   __func__, sd_io->req.opcode, sd_io->req.obj.oid,
 		   sd_io->req.data_length);
-	ret = sd_submit(ctx->fd, sd_io, ctx->timeout);
+	ret = sd_submit(ctx, sd_io);
 	if (sd_io->rsp.result == SD_RES_NO_OBJ && (oid & VDI_BIT)) {
 		/*
 		 * internal sheepdog race;
@@ -470,7 +470,7 @@ int sd_update_inode(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	sd_io.req.obj.oid = vid_to_vdi_oid(sd_vdi->vid);
 	sd_io.req.obj.offset = SD_INODE_HEADER_SIZE + sizeof(vid) * idx;
 	sd_io.addr = &vid;
-	ret = sd_submit(ctx->fd, &sd_io, ctx->timeout);
+	ret = sd_submit(ctx, &sd_io);
 	sd_inode_evaluate_result(sd_vdi, &sd_io);
 	if (ret < 0) {
 		ublk_err( "%s: update inode oid %lx failed, rsp %d err %d\n",
@@ -550,7 +550,7 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	if (ret == SD_RES_SUCCESS)
 		return ret;
 
-	ret = sd_submit(ctx->fd, sd_io, ctx->timeout);
+	ret = sd_submit(ctx, sd_io);
 	sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (ret < 0) {
 		/* Something happened during I/O, re-read inode */
@@ -625,7 +625,7 @@ int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 
 	sd_prep_write(sd_vdi, sd_io);
 
-	ret = sd_submit(ctx->fd, sd_io, ctx->timeout);
+	ret = sd_submit(ctx, sd_io);
 	sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (ret < 0) {
 		ublk_err("%s: tag %u oid %lx opcode %x rsp %d\n",
@@ -661,7 +661,7 @@ int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 	int ret;
 
 	sd_prep_read(sd_vdi, sd_io);
-	ret = sd_submit(ctx->fd, sd_io, ctx->timeout);
+	ret = sd_submit(ctx, sd_io);
 	sd_inode_evaluate_result(sd_vdi, sd_io);
 	if (sd_io->rsp.result == SD_RES_NO_OBJ && (oid & VDI_BIT)) {
 		/*
