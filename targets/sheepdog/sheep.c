@@ -509,10 +509,11 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		struct sd_request *sd_io, uint64_t oid)
+		struct sd_request *sd_io)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint32_t idx = sd_io->offset / object_size;
+	uint64_t oid = vid_to_vdi_oid(sd_io->vid);
 	uint32_t new_vid = 0;
 	bool cleared = false;
 	int ret = 0;
@@ -551,17 +552,17 @@ int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 static void sd_prep_write(struct sd_vdi *sd_vdi,
-			  struct sd_request *sd_io,
-			  uint32_t vid)
+			  struct sd_request *sd_io)
 {
 	uint32_t object_size = SD_OBJECT_SIZE(sd_vdi);
 	uint32_t idx = sd_io->offset / object_size;
+	uint32_t vid = sd_io->vid;
 
 	sd_io->req.proto_ver = SD_PROTO_VER;
 	sd_io->req.flags = SD_FLAG_CMD_WRITE | SD_FLAG_CMD_DIRECT;
 	sd_io->req.flags |= SD_FLAG_CMD_TGT;
 
-	if (!vid) {
+	if (!sd_io->vid) {
 		/* Create new object */
 		vid = sd_vdi->vid;
 		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
@@ -571,10 +572,11 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 		sd_vdi->inode.data_vdi_id[idx] = vid;
 		pthread_mutex_unlock(&sd_vdi->inode_lock);
 
+		sd_io->vid = vid;
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		ublk_dbg(UBLK_DBG_IO_CMD,
 			 "%s: create new oid %lx from vid %x\n",
-			 __func__, sd_io->req.obj.oid, vid);
+			 __func__, sd_io->req.obj.oid, sd_io->vid);
 	} else if (!is_data_obj_writable(sd_vdi, idx)) {
 		/* use copy-on-write */
 		sd_io->req.obj.cow_oid = vid_to_data_oid(vid, idx);
@@ -585,14 +587,15 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 		sd_vdi->inode.data_vdi_id[idx] = vid;
 		pthread_mutex_unlock(&sd_vdi->inode_lock);
 
+		sd_io->vid = vid;
 		sd_io->req.opcode = SD_OP_CREATE_AND_WRITE_OBJ;
 		sd_io->req.flags |= SD_FLAG_CMD_COW;
 		ublk_dbg(UBLK_DBG_IO_CMD,
 			 "%s: create new obj %lx cow %lx from vid %x\n",
 			 __func__, sd_io->req.obj.oid,
-			 sd_io->req.obj.cow_oid, vid);
+			 sd_io->req.obj.cow_oid, sd_io->vid);
 	} else {
-		sd_io->req.obj.oid = vid_to_data_oid(vid, idx);
+		sd_io->req.obj.oid = vid_to_data_oid(sd_io->vid, idx);
 		sd_io->req.obj.cow_oid = 0;
 		sd_io->req.opcode = SD_OP_WRITE_OBJ;
 		ublk_dbg(UBLK_DBG_IO_CMD, "%s: write oid %lx\n",
@@ -602,11 +605,11 @@ static void sd_prep_write(struct sd_vdi *sd_vdi,
 }
 
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		struct sd_request *sd_io, uint32_t vid)
+		struct sd_request *sd_io)
 {
 	int ret;
 
-	sd_prep_write(sd_vdi, sd_io, vid);
+	sd_prep_write(sd_vdi, sd_io);
 
 	sd_io->req.obj.offset = sd_io->offset;
 	sd_io->req.data_length = sd_io->length;
@@ -623,8 +626,11 @@ int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 }
 
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		 struct sd_request *sd_io, uint64_t oid)
+		 struct sd_request *sd_io)
 {
+	uint32_t offset_size = SD_OBJECT_SIZE(sd_vdi);
+	uint32_t idx = sd_io->offset / offset_size;
+	uint64_t oid = vid_to_data_oid(sd_io->vid, idx);
 	int ret;
 
 	ret = sd_read_object(ctx, sd_io, oid);

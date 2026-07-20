@@ -38,6 +38,7 @@ enum sheep_request_type {
 struct sd_request {
 	struct sd_req req;
 	struct sd_rsp rsp;
+	uint32_t vid;
 	void *addr;
 	size_t length;
 	off_t offset;
@@ -63,11 +64,11 @@ int sd_resolve_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 int sd_update_vid(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
 		  uint32_t idx, uint32_t *vid);
 int sd_exec_read(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		 struct sd_request *sd_io, uint64_t oid);
+		 struct sd_request *sd_io);
 int sd_exec_discard(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		    struct sd_request *sd_io, uint64_t oid);
+		    struct sd_request *sd_io);
 int sd_exec_write(struct sd_queue_ctx *ctx, struct sd_vdi *sd_vdi,
-		  struct sd_request *sd_io, uint32_t vid);
+		  struct sd_request *sd_io);
 
 #ifdef __cplusplus
 }

@@ -422,18 +422,18 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 	memset(&sd_io->req, 0, sizeof(sd_io->req));
 	memset(&sd_io->rsp, 0, sizeof(sd_io->rsp));
 	sd_io->req.id = data->tag;
+	sd_io->vid = vid;
 	sd_io->addr = (void *)iod->addr;
 	sd_io->offset = start;
 	sd_io->length = len;
 	switch (ublk_op) {
 	case UBLK_IO_OP_WRITE:
-		ret = sd_exec_write(q_ctx, &dev->vdi, sd_io, vid);
+		ret = sd_exec_write(q_ctx, &dev->vdi, sd_io);
 		if (sd_inode_needs_reload(&dev->vdi)) {
 			ret = sd_read_inode(q_ctx, &dev->vdi);
 			if (ret)
 				break;
-			ret = sd_exec_write(q_ctx, &dev->vdi,
-					    sd_io, vid);
+			ret = sd_exec_write(q_ctx, &dev->vdi, sd_io);
 			if (ret)
 				break;
 		}
@@ -449,13 +449,12 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 		}
 		break;
 	case UBLK_IO_OP_READ:
-		if (!vid) {
+		if (!sd_io->vid) {
 			memset((void *)iod->addr, 0, total);
 			ret = 0;
 			break;
 		}
-		oid = vid_to_data_oid(vid, idx);
-		ret = sd_exec_read(q_ctx, &dev->vdi, sd_io, oid);
+		ret = sd_exec_read(q_ctx, &dev->vdi, sd_io);
 		if (sd_inode_needs_reload(&dev->vdi)) {
 			ret = sd_update_vid(q_ctx, &dev->vdi, idx, &vid);
 			if (ret < 0) {
@@ -463,20 +462,19 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 					 __func__, sd_io->req.id, dev->vdi.vid, idx);
 				break;
 			}
-			oid = vid_to_data_oid(vid, idx);
-			ret = sd_exec_read(q_ctx, &dev->vdi, sd_io, oid);
+			sd_io->vid = vid;
+			ret = sd_exec_read(q_ctx, &dev->vdi, sd_io);
 		}
 		break;
 	case UBLK_IO_OP_DISCARD:
 	case UBLK_IO_OP_WRITE_ZEROES:
-		if (!vid) {
+		if (!sd_io->vid) {
 			if (ublk_op == UBLK_IO_OP_WRITE_ZEROES)
 				memset((void *)iod->addr, 0, total);
 			ret = 0;
 			break;
 		}
-		oid = vid_to_vdi_oid(vid);
-		ret = sd_exec_discard(q_ctx, &dev->vdi, sd_io, oid);
+		ret = sd_exec_discard(q_ctx, &dev->vdi, sd_io);
 		if (sd_inode_needs_reload(&dev->vdi)) {
 			ret = sd_update_vid(q_ctx, &dev->vdi, idx, &vid);
 			if (ret < 0) {
@@ -484,8 +482,8 @@ static int sheepdog_queue_tgt_io(const struct ublksrv_queue *q,
 					 __func__, sd_io->req.id, dev->vdi.vid, idx);
 				break;
 			}
-			oid = vid_to_vdi_oid(vid);
-			ret = sd_exec_discard(q_ctx, &dev->vdi, sd_io, oid);
+			sd_io->vid = vid;
+			ret = sd_exec_discard(q_ctx, &dev->vdi, sd_io);
 		}
 		break;
 	default:
